@@ -1,0 +1,35 @@
+# Environment files with sensitive information (private keys, account IDs)
+.env
+*.env
+.seller-env
+.buyer-env
+
+# Go build artifacts
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+go.work
+go.sum
+
+# Compiled binaries (any name, no extension)
+hedera4d
+hedera
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Backup files
+*.bak
+
