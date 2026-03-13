@@ -1,0 +1,16 @@
+# Hedera / Neuron buyer credentials
+hedera_id=0.0.123456
+hedera_evm_id=0x0000000000000000000000000000000000000000
+private_key=302e020100300506032b657004220420replace_with_private_key
+
+# Network / contract configuration
+eth_rpc_url=https://replace-with-rpc.example
+mirror_api_url=https://testnet.mirrornode.hedera.com
+smart_contract_address=0xreplace_with_contract_address
+
+# Buyer metadata
+location=50.1234,-5.1234,100
+list_of_sellers=16Uiu2HAmExampleSellerPeerId1,16Uiu2HAmExampleSellerPeerId2
+
+# Optional: pre-created Hedera topic for MLAT audit records
+mlat_topic_id=0.0.1234567

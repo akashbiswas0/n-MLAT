@@ -17,7 +17,7 @@ import (
 	"github.com/libp2p/go-libp2p/core/network"
 	"github.com/libp2p/go-libp2p/core/protocol"
 
-	hcs "quickstart/hedera"
+	hcs "quickstart/hedera-main"
 	"quickstart/mlat"
 	"quickstart/server"
 )
@@ -55,12 +55,20 @@ func int64FromBytes(b []byte) int64   { return int64(binary.BigEndian.Uint64(b))
 func uint64FromBytes(b []byte) uint64 { return binary.BigEndian.Uint64(b) }
 
 type BroadcastMessage struct {
-	ICAO       string  `json:"icao"`
-	Lat        float64 `json:"lat"`
-	Lon        float64 `json:"lon"`
-	Alt        float64 `json:"alt"`
-	Cost       float64 `json:"cost"`
-	NumSensors int     `json:"num_sensors"`
+	ICAO           string                    `json:"icao"`
+	Lat            float64                   `json:"lat"`
+	Lon            float64                   `json:"lon"`
+	Alt            float64                   `json:"alt"`
+	Cost           float64                   `json:"cost"`
+	NumSensors     int                       `json:"num_sensors"`
+	GroundSpeedMPS float64                   `json:"ground_speed_mps"`
+	TrackSamples   int                       `json:"track_samples"`
+	RMSResidualM   float64                   `json:"rms_residual_m"`
+	UncertaintyM   float64                   `json:"uncertainty_m"`
+	GDOP           float64                   `json:"gdop"`
+	QualityScore   float64                   `json:"quality_score"`
+	QualityLabel   string                    `json:"quality_label"`
+	Contributors   []mlat.SensorContribution `json:"contributors"`
 }
 
 // pktCount is a simple atomic counter for diagnostic logging
@@ -69,8 +77,11 @@ var pktCount atomic.Int64
 func main() {
 	var NrnProtocol = protocol.ID("neuron/ADSB/0.0.2")
 
-	// Load true sensor locations from override file
-	mlat.LoadLocationOverrides("location-override.json")
+	// Fail fast if trusted seller geometry is unavailable. MLAT results are not
+	// credible when we silently fall back to seller-reported coordinates.
+	if err := mlat.LoadLocationOverrides("location-override.json"); err != nil {
+		log.Fatalf("location overrides are required for MLAT: %v", err)
+	}
 
 	// Start HTTP/WebSocket server
 	go server.Start(":8080", "./static")
@@ -82,39 +93,77 @@ func main() {
 		publisher = nil
 	}
 
+	calibrator := mlat.NewClockCalibrator()
+	tracker := mlat.NewTracker()
+	state := NewAppState()
+
 	// MLAT buffer — fires when 4+ sensors heard the same aircraft
 	buf := mlat.NewBuffer(func(icao string, obs []mlat.Observation) {
-		result, err := mlat.Solve(icao, obs)
+		calibratedObs := calibrator.Apply(obs)
+		result, err := mlat.Solve(icao, calibratedObs)
 		if err != nil {
 			log.Printf("MLAT solve failed for %s: %v", icao, err)
 			return
 		}
+		calibrator.Update(calibratedObs, result)
+		trackedResult := tracker.Update(result)
+		if trackedResult == nil {
+			return
+		}
+		trackedResult.Contributors = calibrator.DecorateContributors(trackedResult.Contributors)
 
-		log.Printf("✈  %s → Lat=%.4f Lon=%.4f Alt=%.0fm (sensors=%d cost=%.2e)",
-			result.ICAO, result.Lat, result.Lon, result.Alt,
-			result.NumSensors, result.Cost)
+		broadcast := BroadcastMessage{
+			ICAO:           trackedResult.ICAO,
+			Lat:            trackedResult.Lat,
+			Lon:            trackedResult.Lon,
+			Alt:            trackedResult.Alt,
+			Cost:           trackedResult.Cost,
+			NumSensors:     trackedResult.NumSensors,
+			GroundSpeedMPS: trackedResult.GroundSpeedMPS,
+			TrackSamples:   trackedResult.TrackSamples,
+			RMSResidualM:   trackedResult.RMSResidualM,
+			UncertaintyM:   trackedResult.UncertaintyM,
+			GDOP:           trackedResult.GDOP,
+			QualityScore:   trackedResult.QualityScore,
+			QualityLabel:   trackedResult.QualityLabel,
+			Contributors:   trackedResult.Contributors,
+		}
+		state.RecordFix(broadcast)
 
-		server.Broadcast(BroadcastMessage{
-			ICAO:       result.ICAO,
-			Lat:        result.Lat,
-			Lon:        result.Lon,
-			Alt:        result.Alt,
-			Cost:       result.Cost,
-			NumSensors: result.NumSensors,
+		log.Printf("✈  %s → Lat=%.4f Lon=%.4f Alt=%.0fm (sensors=%d track=%d speed=%.1fm/s uncertainty=%.0fm gdop=%.2f quality=%s cost=%.2e)",
+			trackedResult.ICAO, trackedResult.Lat, trackedResult.Lon, trackedResult.Alt,
+			trackedResult.NumSensors, trackedResult.TrackSamples, trackedResult.GroundSpeedMPS,
+			trackedResult.UncertaintyM, trackedResult.GDOP, trackedResult.QualityLabel, trackedResult.Cost)
+
+		server.Broadcast(WSMessage{
+			Type: "fix",
+			Data: broadcast,
 		})
 
 		if publisher != nil {
 			publisher.Publish(hcs.AuditRecord{
-				ICAO:         result.ICAO,
-				Lat:          result.Lat,
-				Lon:          result.Lon,
-				AltM:         result.Alt,
-				Cost:         result.Cost,
-				NumSensors:   result.NumSensors,
+				ICAO:         trackedResult.ICAO,
+				Lat:          trackedResult.Lat,
+				Lon:          trackedResult.Lon,
+				AltM:         trackedResult.Alt,
+				Cost:         trackedResult.Cost,
+				NumSensors:   trackedResult.NumSensors,
 				TimestampUTC: time.Now().UTC().Format(time.RFC3339),
 			})
 		}
 	})
+	buf.OnObservation = state.RecordObservation
+
+	go func() {
+		ticker := time.NewTicker(1 * time.Second)
+		defer ticker.Stop()
+		for range ticker.C {
+			server.Broadcast(WSMessage{
+				Type: "state",
+				Data: state.Snapshot(),
+			})
+		}
+	}()
 
 	neuronsdk.LaunchSDK(
 		"0.1",
@@ -125,11 +174,27 @@ func main() {
 				defer streamHandler.Close()
 
 				peerID := streamHandler.Conn().RemotePeer()
-				b.SetStreamHandler(peerID, &streamHandler)
+				if b != nil {
+					if _, exists := b.GetBuffer(peerID); exists {
+						b.SetStreamHandler(peerID, &streamHandler)
+					} else {
+						log.Printf("⚠  inbound stream from unregistered seller %s; skipping SDK buffer registration", peerID)
+					}
+				}
 
 				pubKeyHex := mlat.PeerIDToPublicKey(peerID.String())
-				sensorName := mlat.NameForKey(pubKeyHex)
+				override, ok := mlat.OverrideForKey(pubKeyHex)
+				if !ok {
+					log.Printf("❌ Rejecting seller without trusted location override: %s (%s)", mlat.NameForKey(pubKeyHex), peerID)
+					return
+				}
+				sensorName := override.Name
+				if sensorName == "" {
+					sensorName = mlat.NameForKey(pubKeyHex)
+				}
+				state.SellerConnected(peerID.String(), sensorName)
 				log.Printf("✅ Stream opened from seller: %s (%s)", sensorName, peerID)
+				defer state.SellerDisconnected(peerID.String())
 
 				for {
 					if streamHandler.Conn().IsClosed() {
@@ -169,25 +234,17 @@ func main() {
 					offset := 0
 					sensorID := int64FromBytes(packet[offset : offset+sensorIDSize])
 					offset += sensorIDSize
-					reportedLat := float64FromBytes(packet[offset : offset+sensorLatitudeSize])
+					_ = float64FromBytes(packet[offset : offset+sensorLatitudeSize])
 					offset += sensorLatitudeSize
-					reportedLon := float64FromBytes(packet[offset : offset+sensorLongitudeSize])
+					_ = float64FromBytes(packet[offset : offset+sensorLongitudeSize])
 					offset += sensorLongitudeSize
-					reportedAlt := float64FromBytes(packet[offset : offset+sensorAltitudeSize])
+					_ = float64FromBytes(packet[offset : offset+sensorAltitudeSize])
 					offset += sensorAltitudeSize
 					secsMidnight := uint64FromBytes(packet[offset : offset+secondsSinceMidnightSize])
 					offset += secondsSinceMidnightSize
 					nanos := uint64FromBytes(packet[offset : offset+nanosecondsSize])
 					offset += nanosecondsSize
 					rawModeS := packet[offset:]
-
-					// *** Apply location override using public key ***
-					// This replaces the seller's self-reported (intentionally wrong)
-					// position with the true position from location-override.json
-					trueLat, trueLon, trueAlt := mlat.ApplyOverride(
-						pubKeyHex,
-						reportedLat, reportedLon, reportedAlt,
-					)
 
 					icao, ok := mlat.ExtractICAO(rawModeS)
 					if !ok {
@@ -197,19 +254,20 @@ func main() {
 					obs := mlat.Observation{
 						ICAO:                 icao,
 						SensorID:             sensorID,
-						SensorLat:            trueLat,
-						SensorLon:            trueLon,
-						SensorAlt:            trueAlt,
+						SensorName:           sensorName,
+						SensorLat:            override.Lat,
+						SensorLon:            override.Lon,
+						SensorAlt:            override.Alt,
 						SecondsSinceMidnight: secsMidnight,
 						Nanoseconds:          nanos,
 						RawModeS:             rawModeS,
 					}
 
 					n := pktCount.Add(1)
-				if n%100 == 0 {
-					log.Printf("[diag] packets received: %d (last from %s, icao=%s)", n, sensorName, icao)
-				}
-				buf.Add(obs)
+					if n%100 == 0 {
+						log.Printf("[diag] packets received: %d (last from %s, icao=%s)", n, sensorName, icao)
+					}
+					buf.Add(obs)
 				}
 			})
 		},
