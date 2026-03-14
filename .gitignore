@@ -33,3 +33,4 @@ Thumbs.db
 # Backup files
 *.bak
 
+location-override.json
