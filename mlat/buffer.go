@@ -10,10 +10,8 @@ import (
 )
 
 const (
-	
 	WindowSize = 2 * time.Second
 
-	
 	CorrelationWindow = 10 * time.Millisecond
 
 	MinSensors = 4
@@ -26,14 +24,14 @@ type observationGroup struct {
 	obs        []Observation
 }
 
-
 type Buffer struct {
-	mu        sync.Mutex
-	groups    map[string]*observationGroup // groupID → observations for one transmitted frame
-	index     map[string][]string          // correlation key → candidate groupIDs
-	timers    map[string]*time.Timer       // groupID → flush timer
-	nextGroup atomic.Uint64
-	OnReady   func(icao string, obs []Observation) // called when group is ready to solve
+	mu            sync.Mutex
+	groups        map[string]*observationGroup // groupID → observations for one transmitted frame
+	index         map[string][]string          // correlation key → candidate groupIDs
+	timers        map[string]*time.Timer       // groupID → flush timer
+	nextGroup     atomic.Uint64
+	OnReady       func(icao string, obs []Observation) // called when group is ready to solve
+	OnObservation func(obs Observation, sensors int)
 }
 
 func NewBuffer(onReady func(icao string, obs []Observation)) *Buffer {
@@ -51,6 +49,9 @@ func (b *Buffer) Add(obs Observation) {
 
 	group := b.findOrCreateGroup(obs)
 	group.add(obs)
+	if b.OnObservation != nil {
+		b.OnObservation(obs, len(group.obs))
+	}
 	log.Printf("[buf] ICAO %s: frame %s now has %d sensor(s) (sensorID=%d)",
 		obs.ICAO, group.id, len(group.obs), obs.SensorID)
 
