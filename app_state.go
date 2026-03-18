@@ -43,6 +43,10 @@ type sellerState struct {
 	name        string
 	connectedAt time.Time
 	lastSeen    time.Time
+	trustScore  float64
+	trustLabel  string
+	samples     int
+	sensorIDs   map[int64]struct{}
 }
 
 type waitingState struct {
@@ -68,9 +72,12 @@ type TrackedAircraft struct {
 }
 
 type SellerSummary struct {
-	PeerID         string `json:"peer_id"`
-	Name           string `json:"name"`
-	ConnectedSince string `json:"connected_since"`
+	PeerID         string  `json:"peer_id"`
+	Name           string  `json:"name"`
+	ConnectedSince string  `json:"connected_since"`
+	TrustScore     float64 `json:"trust_score"`
+	TrustLabel     string  `json:"trust_label"`
+	Samples        int     `json:"samples"`
 }
 
 type AnalyticsSummary struct {
@@ -81,6 +88,8 @@ type AnalyticsSummary struct {
 	AvgQualityScore float64 `json:"avg_quality_score"`
 	AvgGDOP         float64 `json:"avg_gdop"`
 	QualityLabel    string  `json:"quality_label"`
+	AvgTrustScore   float64 `json:"avg_trust_score"`
+	TrustLabel      string  `json:"trust_label"`
 	TrackedAircraft int     `json:"tracked_aircraft"`
 }
 
@@ -95,6 +104,7 @@ type AppState struct {
 	totalQuality  float64
 	totalGDOP     float64
 	totalUncM     float64
+	totalTrust    float64
 	metricSamples int
 }
 
@@ -110,13 +120,62 @@ func (s *AppState) SellerConnected(peerID, name string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	now := time.Now().UTC()
-	s.sellers[peerID] = sellerState{name: name, connectedAt: now, lastSeen: now}
+	existing, ok := s.sellers[peerID]
+	if ok {
+		existing.name = name
+		existing.connectedAt = now
+		existing.lastSeen = now
+		if existing.trustScore == 0 {
+			existing.trustScore = 70
+		}
+		if existing.trustLabel == "" {
+			existing.trustLabel = "WATCH"
+		}
+		if existing.sensorIDs == nil {
+			existing.sensorIDs = make(map[int64]struct{})
+		}
+		s.sellers[peerID] = existing
+		return
+	}
+	s.sellers[peerID] = sellerState{
+		name:        name,
+		connectedAt: now,
+		lastSeen:    now,
+		trustScore:  70,
+		trustLabel:  "WATCH",
+		sensorIDs:   make(map[int64]struct{}),
+	}
 }
 
 func (s *AppState) SellerDisconnected(peerID string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	delete(s.sellers, peerID)
+}
+
+func (s *AppState) NoteSellerSensor(peerID, name string, sensorID int64) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	now := time.Now().UTC()
+	seller, ok := s.sellers[peerID]
+	if !ok {
+		seller = sellerState{
+			name:        name,
+			connectedAt: now,
+			lastSeen:    now,
+			trustScore:  70,
+			trustLabel:  "WATCH",
+			sensorIDs:   make(map[int64]struct{}),
+		}
+	}
+	if seller.sensorIDs == nil {
+		seller.sensorIDs = make(map[int64]struct{})
+	}
+	seller.name = name
+	seller.lastSeen = now
+	seller.sensorIDs[sensorID] = struct{}{}
+	s.sellers[peerID] = seller
 }
 
 func (s *AppState) RecordObservation(obs mlat.Observation, sensors int) {
@@ -155,11 +214,37 @@ func (s *AppState) RecordFix(fix BroadcastMessage) {
 	s.totalSensors += float64(fix.NumSensors)
 	s.totalQuality += fix.QualityScore
 	s.totalUncM += fix.UncertaintyM
+	s.totalTrust += fix.TrustScore
 	if !math.IsNaN(fix.GDOP) && !math.IsInf(fix.GDOP, 0) {
 		s.totalGDOP += fix.GDOP
 	}
 	s.metricSamples++
 	s.fixWindow = append(s.fixWindow, now)
+
+	for _, contributor := range fix.Contributors {
+		for peerID, seller := range s.sellers {
+			if _, ok := seller.sensorIDs[contributor.SensorID]; !ok {
+				continue
+			}
+			score := contributor.SellerScore
+			if score <= 0 {
+				score = 70
+			}
+			if seller.samples == 0 {
+				seller.trustScore = score
+			} else {
+				seller.trustScore = seller.trustScore*0.7 + score*0.3
+			}
+			seller.trustLabel = contributor.TrustLabel
+			if seller.trustLabel == "" {
+				seller.trustLabel = trustLabelForScore(seller.trustScore)
+			}
+			seller.samples++
+			seller.lastSeen = now
+			s.sellers[peerID] = seller
+			break
+		}
+	}
 
 	delete(s.waiting, fix.ICAO)
 }
@@ -240,6 +325,9 @@ func (s *AppState) Snapshot() LiveState {
 			PeerID:         peerID,
 			Name:           seller.name,
 			ConnectedSince: seller.connectedAt.Format(time.RFC3339),
+			TrustScore:     seller.trustScore,
+			TrustLabel:     seller.trustLabel,
+			Samples:        seller.samples,
 		})
 	}
 	sort.Slice(sellers, func(i, j int) bool { return sellers[i].Name < sellers[j].Name })
@@ -255,6 +343,8 @@ func (s *AppState) Snapshot() LiveState {
 		analytics.AvgQualityScore = s.totalQuality / float64(s.metricSamples)
 		analytics.AvgGDOP = s.totalGDOP / float64(s.metricSamples)
 		analytics.QualityLabel = analyticsQualityLabel(analytics.AvgQualityScore)
+		analytics.AvgTrustScore = s.totalTrust / float64(s.metricSamples)
+		analytics.TrustLabel = trustLabelForScore(analytics.AvgTrustScore)
 	}
 
 	return LiveState{
@@ -264,6 +354,17 @@ func (s *AppState) Snapshot() LiveState {
 		Sellers:          sellers,
 		Analytics:        analytics,
 		Waiting:          waiting,
+	}
+}
+
+func trustLabelForScore(score float64) string {
+	switch {
+	case score >= 75:
+		return "VERIFIED"
+	case score >= 50:
+		return "WATCH"
+	default:
+		return "LOW"
 	}
 }
 

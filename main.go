@@ -68,25 +68,22 @@ type BroadcastMessage struct {
 	GDOP           float64                   `json:"gdop"`
 	QualityScore   float64                   `json:"quality_score"`
 	QualityLabel   string                    `json:"quality_label"`
+	TrustScore     float64                   `json:"trust_score"`
+	TrustLabel     string                    `json:"trust_label"`
 	Contributors   []mlat.SensorContribution `json:"contributors"`
 }
 
-// pktCount is a simple atomic counter for diagnostic logging
 var pktCount atomic.Int64
 
 func main() {
 	var NrnProtocol = protocol.ID("neuron/ADSB/0.0.2")
 
-	// Fail fast if trusted seller geometry is unavailable. MLAT results are not
-	// credible when we silently fall back to seller-reported coordinates.
 	if err := mlat.LoadLocationOverrides("location-override.json"); err != nil {
 		log.Fatalf("location overrides are required for MLAT: %v", err)
 	}
 
-	// Start HTTP/WebSocket server
 	go server.Start(":8080", "./static")
 
-	// Hedera HCS publisher (optional)
 	publisher, err := hcs.NewPublisher()
 	if err != nil {
 		log.Printf("⚠  Hedera publisher disabled: %v", err)
@@ -97,7 +94,6 @@ func main() {
 	tracker := mlat.NewTracker()
 	state := NewAppState()
 
-	// MLAT buffer — fires when 4+ sensors heard the same aircraft
 	buf := mlat.NewBuffer(func(icao string, obs []mlat.Observation) {
 		calibratedObs := calibrator.Apply(obs)
 		result, err := mlat.Solve(icao, calibratedObs)
@@ -105,11 +101,11 @@ func main() {
 			log.Printf("MLAT solve failed for %s: %v", icao, err)
 			return
 		}
-		calibrator.Update(calibratedObs, result)
 		trackedResult := tracker.Update(result)
 		if trackedResult == nil {
 			return
 		}
+		calibrator.Update(calibratedObs, trackedResult)
 		trackedResult.Contributors = calibrator.DecorateContributors(trackedResult.Contributors)
 
 		broadcast := BroadcastMessage{
@@ -126,14 +122,16 @@ func main() {
 			GDOP:           trackedResult.GDOP,
 			QualityScore:   trackedResult.QualityScore,
 			QualityLabel:   trackedResult.QualityLabel,
+			TrustScore:     trackedResult.TrustScore,
+			TrustLabel:     trackedResult.TrustLabel,
 			Contributors:   trackedResult.Contributors,
 		}
 		state.RecordFix(broadcast)
 
-		log.Printf("✈  %s → Lat=%.4f Lon=%.4f Alt=%.0fm (sensors=%d track=%d speed=%.1fm/s uncertainty=%.0fm gdop=%.2f quality=%s cost=%.2e)",
+		log.Printf("✈  %s → Lat=%.4f Lon=%.4f Alt=%.0fm (sensors=%d track=%d speed=%.1fm/s uncertainty=%.0fm gdop=%.2f quality=%s trust=%s cost=%.2e)",
 			trackedResult.ICAO, trackedResult.Lat, trackedResult.Lon, trackedResult.Alt,
 			trackedResult.NumSensors, trackedResult.TrackSamples, trackedResult.GroundSpeedMPS,
-			trackedResult.UncertaintyM, trackedResult.GDOP, trackedResult.QualityLabel, trackedResult.Cost)
+			trackedResult.UncertaintyM, trackedResult.GDOP, trackedResult.QualityLabel, trackedResult.TrustLabel, trackedResult.Cost)
 
 		server.Broadcast(WSMessage{
 			Type: "fix",
@@ -142,13 +140,25 @@ func main() {
 
 		if publisher != nil {
 			publisher.Publish(hcs.AuditRecord{
-				ICAO:         trackedResult.ICAO,
-				Lat:          trackedResult.Lat,
-				Lon:          trackedResult.Lon,
-				AltM:         trackedResult.Alt,
-				Cost:         trackedResult.Cost,
-				NumSensors:   trackedResult.NumSensors,
-				TimestampUTC: time.Now().UTC().Format(time.RFC3339),
+				EventType:      "mlat_fix",
+				Version:        "0.2",
+				ICAO:           trackedResult.ICAO,
+				Lat:            trackedResult.Lat,
+				Lon:            trackedResult.Lon,
+				AltM:           trackedResult.Alt,
+				Cost:           trackedResult.Cost,
+				NumSensors:     trackedResult.NumSensors,
+				GroundSpeedMPS: trackedResult.GroundSpeedMPS,
+				TrackSamples:   trackedResult.TrackSamples,
+				RMSResidualM:   trackedResult.RMSResidualM,
+				UncertaintyM:   trackedResult.UncertaintyM,
+				GDOP:           trackedResult.GDOP,
+				QualityScore:   trackedResult.QualityScore,
+				QualityLabel:   trackedResult.QualityLabel,
+				TrustScore:     trackedResult.TrustScore,
+				TrustLabel:     trackedResult.TrustLabel,
+				Contributors:   contributorAudit(trackedResult.Contributors),
+				TimestampUTC:   time.Now().UTC().Format(time.RFC3339),
 			})
 		}
 	})
@@ -164,6 +174,34 @@ func main() {
 			})
 		}
 	}()
+
+	if publisher != nil {
+		go func() {
+			ticker := time.NewTicker(60 * time.Second)
+			defer ticker.Stop()
+			for range ticker.C {
+				snapshot := state.Snapshot()
+				publisher.Publish(hcs.AuditRecord{
+					EventType:        "network_summary",
+					Version:          "0.2",
+					ConnectedSellers: snapshot.ConnectedSellers,
+					RawAircraft:      snapshot.RawAircraft,
+					TrackedAircraft:  snapshot.Analytics.TrackedAircraft,
+					TotalFixes:       snapshot.Analytics.TotalFixes,
+					FixRatePerMin:    snapshot.Analytics.FixRatePerMin,
+					AvgSensors:       snapshot.Analytics.AvgSensors,
+					AvgUncertaintyM:  snapshot.Analytics.AvgUncertaintyM,
+					AvgQualityScore:  snapshot.Analytics.AvgQualityScore,
+					AvgQualityLabel:  snapshot.Analytics.QualityLabel,
+					AvgTrustScore:    snapshot.Analytics.AvgTrustScore,
+					AvgTrustLabel:    snapshot.Analytics.TrustLabel,
+					AvgGDOP:          snapshot.Analytics.AvgGDOP,
+					Sellers:          sellerAudit(snapshot.Sellers),
+					TimestampUTC:     time.Now().UTC().Format(time.RFC3339),
+				})
+			}
+		}()
+	}
 
 	neuronsdk.LaunchSDK(
 		"0.1",
@@ -262,6 +300,7 @@ func main() {
 						Nanoseconds:          nanos,
 						RawModeS:             rawModeS,
 					}
+					state.NoteSellerSensor(peerID.String(), sensorName, sensorID)
 
 					n := pktCount.Add(1)
 					if n%100 == 0 {
@@ -277,4 +316,36 @@ func main() {
 		func(ctx context.Context, h host.Host, b *commonlib.NodeBuffers) {},
 		func(msg hederasdk.TopicMessage) {},
 	)
+}
+
+func contributorAudit(contributors []mlat.SensorContribution) []hcs.ContributorAudit {
+	out := make([]hcs.ContributorAudit, 0, len(contributors))
+	for _, contributor := range contributors {
+		out = append(out, hcs.ContributorAudit{
+			SensorID:          contributor.SensorID,
+			SensorName:        contributor.SensorName,
+			ResidualM:         contributor.ResidualM,
+			ClockAdjustmentNs: contributor.ClockAdjustmentNs,
+			ClockJitterNs:     contributor.ClockJitterNs,
+			ClockSamples:      contributor.ClockSamples,
+			ClockHealth:       contributor.ClockHealth,
+			SellerScore:       contributor.SellerScore,
+			TrustLabel:        contributor.TrustLabel,
+		})
+	}
+	return out
+}
+
+func sellerAudit(sellers []SellerSummary) []hcs.SellerAudit {
+	out := make([]hcs.SellerAudit, 0, len(sellers))
+	for _, seller := range sellers {
+		out = append(out, hcs.SellerAudit{
+			PeerID:     seller.PeerID,
+			Name:       seller.Name,
+			TrustScore: seller.TrustScore,
+			TrustLabel: seller.TrustLabel,
+			Samples:    seller.Samples,
+		})
+	}
+	return out
 }
