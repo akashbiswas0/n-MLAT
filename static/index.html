@@ -1,0 +1,478 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>4DSky MLAT — Live Aircraft</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Rajdhani:wght@400;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css"/>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+  <style>
+    :root {
+      --green:  #00ff88;
+      --dimgreen: #00cc66;
+      --bg:     #040d0a;
+      --panel:  #060f0c;
+      --border: #0a2a1a;
+      --text:   #b0ffd4;
+      --dim:    #3a7a58;
+      --warn:   #ffaa00;
+      --red:    #ff4455;
+    }
+
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    body {
+      background: var(--bg);
+      font-family: 'Share Tech Mono', monospace;
+      color: var(--text);
+      height: 100vh;
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+    }
+
+    /* ── Header ── */
+    header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 10px 20px;
+      background: var(--panel);
+      border-bottom: 1px solid var(--border);
+      flex-shrink: 0;
+      z-index: 1000;
+    }
+
+    .logo {
+      font-family: 'Rajdhani', sans-serif;
+      font-weight: 700;
+      font-size: 1.3rem;
+      letter-spacing: 0.15em;
+      color: var(--green);
+    }
+    .logo span { color: var(--dim); }
+
+    .status-bar {
+      display: flex;
+      gap: 24px;
+      font-size: 0.7rem;
+      color: var(--dim);
+    }
+    .status-bar .val { color: var(--green); }
+    .status-bar .warn { color: var(--warn); }
+
+    .clock {
+      font-size: 0.85rem;
+      color: var(--green);
+      letter-spacing: 0.1em;
+    }
+
+    /* ── Layout ── */
+    .main {
+      display: flex;
+      flex: 1;
+      overflow: hidden;
+    }
+
+    /* ── Map ── */
+    #map {
+      flex: 1;
+      background: #020908;
+      position: relative;
+    }
+
+    /* Dark map tiles overlay */
+    #map::after {
+      content: '';
+      position: absolute;
+      inset: 0;
+      pointer-events: none;
+      background: radial-gradient(ellipse at center, transparent 40%, rgba(4,13,10,0.4) 100%);
+      z-index: 400;
+    }
+
+    /* Leaflet dark overrides */
+    .leaflet-tile { filter: invert(1) hue-rotate(155deg) brightness(0.5) saturate(0.7); }
+    .leaflet-control-zoom a {
+      background: var(--panel) !important;
+      color: var(--green) !important;
+      border-color: var(--border) !important;
+    }
+    .leaflet-control-attribution { display: none; }
+
+    /* ── Sidebar ── */
+    aside {
+      width: 280px;
+      background: var(--panel);
+      border-left: 1px solid var(--border);
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      flex-shrink: 0;
+    }
+
+    .panel-title {
+      padding: 10px 14px;
+      font-family: 'Rajdhani', sans-serif;
+      font-weight: 600;
+      font-size: 0.7rem;
+      letter-spacing: 0.2em;
+      color: var(--dim);
+      border-bottom: 1px solid var(--border);
+      text-transform: uppercase;
+    }
+
+    #aircraft-list {
+      flex: 1;
+      overflow-y: auto;
+      padding: 4px 0;
+    }
+
+    #aircraft-list::-webkit-scrollbar { width: 4px; }
+    #aircraft-list::-webkit-scrollbar-track { background: var(--bg); }
+    #aircraft-list::-webkit-scrollbar-thumb { background: var(--border); }
+
+    .ac-row {
+      display: grid;
+      grid-template-columns: 80px 1fr;
+      gap: 4px;
+      padding: 8px 14px;
+      border-bottom: 1px solid var(--border);
+      cursor: pointer;
+      transition: background 0.15s;
+    }
+    .ac-row:hover { background: rgba(0,255,136,0.04); }
+    .ac-row.selected { background: rgba(0,255,136,0.08); border-left: 2px solid var(--green); }
+
+    .ac-icao {
+      font-size: 0.9rem;
+      color: var(--green);
+      font-weight: bold;
+      letter-spacing: 0.1em;
+    }
+    .ac-meta {
+      font-size: 0.65rem;
+      color: var(--dim);
+      line-height: 1.6;
+    }
+    .ac-meta span { color: var(--text); }
+
+    /* Stats panel */
+    .stats {
+      border-top: 1px solid var(--border);
+      padding: 10px 14px;
+      font-size: 0.65rem;
+      color: var(--dim);
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 6px;
+    }
+    .stat-val {
+      font-size: 1.1rem;
+      color: var(--green);
+      font-family: 'Rajdhani', sans-serif;
+      font-weight: 700;
+    }
+
+    /* ── Custom aircraft marker ── */
+    .ac-marker {
+      position: relative;
+      width: 28px;
+      height: 28px;
+    }
+    .ac-dot {
+      position: absolute;
+      top: 50%; left: 50%;
+      transform: translate(-50%, -50%);
+      width: 8px; height: 8px;
+      background: var(--green);
+      border-radius: 50%;
+      box-shadow: 0 0 6px var(--green), 0 0 12px rgba(0,255,136,0.4);
+    }
+    .ac-ping {
+      position: absolute;
+      top: 50%; left: 50%;
+      transform: translate(-50%, -50%);
+      width: 8px; height: 8px;
+      border-radius: 50%;
+      border: 1px solid var(--green);
+      animation: ping 1.5s ease-out infinite;
+    }
+    @keyframes ping {
+      0%   { transform: translate(-50%,-50%) scale(1); opacity: 0.8; }
+      100% { transform: translate(-50%,-50%) scale(3.5); opacity: 0; }
+    }
+
+    /* scan line effect */
+    @keyframes scanline {
+      0%   { top: 0; }
+      100% { top: 100%; }
+    }
+    .scan {
+      position: absolute;
+      left: 0; right: 0;
+      height: 1px;
+      background: linear-gradient(transparent, rgba(0,255,136,0.12), transparent);
+      pointer-events: none;
+      z-index: 500;
+      animation: scanline 4s linear infinite;
+    }
+
+    /* Connection status */
+    .conn-dot {
+      display: inline-block;
+      width: 7px; height: 7px;
+      border-radius: 50%;
+      margin-right: 5px;
+      background: var(--red);
+      transition: background 0.3s;
+    }
+    .conn-dot.live { background: var(--green); box-shadow: 0 0 6px var(--green); }
+
+    /* Tooltip */
+    .leaflet-tooltip {
+      background: var(--panel) !important;
+      border: 1px solid var(--border) !important;
+      color: var(--green) !important;
+      font-family: 'Share Tech Mono', monospace !important;
+      font-size: 0.7rem !important;
+      padding: 4px 8px !important;
+      border-radius: 2px !important;
+      box-shadow: none !important;
+    }
+
+    /* empty state */
+    .empty {
+      padding: 20px 14px;
+      color: var(--dim);
+      font-size: 0.7rem;
+      line-height: 1.8;
+    }
+  </style>
+</head>
+<body>
+
+<header>
+  <div class="logo">4D<span>SKY</span> · MLAT</div>
+  <div class="status-bar">
+    <div><span class="conn-dot" id="conn-dot"></span><span id="conn-status">OFFLINE</span></div>
+    <div>AIRCRAFT <span class="val" id="hdr-count">0</span></div>
+    <div>FIXES <span class="val" id="hdr-fixes">0</span></div>
+    <div>NETWORK <span class="val">NEURON/P2P</span></div>
+  </div>
+  <div class="clock" id="clock">--:--:-- UTC</div>
+</header>
+
+<div class="main">
+  <div id="map">
+    <div class="scan"></div>
+  </div>
+
+  <aside>
+    <div class="panel-title">Live Aircraft</div>
+    <div id="aircraft-list">
+      <div class="empty" id="empty-msg">
+        Waiting for MLAT fixes...<br><br>
+        Need ≥4 sensors to hear<br>
+        the same aircraft within<br>
+        600ms window.
+      </div>
+    </div>
+    <div class="stats">
+      <div>
+        <div class="stat-val" id="stat-aircraft">0</div>
+        <div>Aircraft</div>
+      </div>
+      <div>
+        <div class="stat-val" id="stat-fixes">0</div>
+        <div>Total Fixes</div>
+      </div>
+      <div>
+        <div class="stat-val" id="stat-sensors">0</div>
+        <div>Avg Sensors</div>
+      </div>
+      <div>
+        <div class="stat-val" id="stat-quality">—</div>
+        <div>Avg Quality</div>
+      </div>
+    </div>
+  </aside>
+</div>
+
+<script>
+// ── State ──
+const aircraft = {};   // icao → { marker, lat, lon, alt, fixes, sensors, lastSeen }
+let totalFixes = 0;
+let selectedICAO = null;
+let ws = null;
+let reconnectTimer = null;
+
+// ── Map ──
+const map = L.map('map', { zoomControl: true, attributionControl: false })
+  .setView([51.5, 0], 6);
+
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+  maxZoom: 18
+}).addTo(map);
+
+// ── Aircraft marker factory ──
+function makeIcon(icao) {
+  return L.divIcon({
+    className: '',
+    html: `<div class="ac-marker"><div class="ac-ping"></div><div class="ac-dot"></div></div>`,
+    iconSize: [28, 28],
+    iconAnchor: [14, 14],
+  });
+}
+
+// ── Update aircraft on map and sidebar ──
+function updateAircraft(data) {
+  const { icao, lat, lon, alt, cost, num_sensors } = data;
+  totalFixes++;
+  document.getElementById('hdr-fixes').textContent = totalFixes;
+  document.getElementById('stat-fixes').textContent = totalFixes;
+
+  if (!aircraft[icao]) {
+    // New aircraft
+    const marker = L.marker([lat, lon], { icon: makeIcon(icao) })
+      .bindTooltip(icao, { permanent: false, direction: 'top' })
+      .addTo(map);
+
+    marker.on('click', () => selectAircraft(icao));
+    aircraft[icao] = { marker, lat, lon, alt, fixes: 0, sensors: num_sensors, lastSeen: Date.now() };
+    document.getElementById('empty-msg')?.remove();
+  } else {
+    aircraft[icao].marker.setLatLng([lat, lon]);
+  }
+
+  aircraft[icao].lat = lat;
+  aircraft[icao].lon = lon;
+  aircraft[icao].alt = alt;
+  aircraft[icao].fixes++;
+  aircraft[icao].sensors = num_sensors;
+  aircraft[icao].lastSeen = Date.now();
+  aircraft[icao].cost = cost;
+
+  refreshSidebar();
+  updateStats();
+}
+
+function refreshSidebar() {
+  const list = document.getElementById('aircraft-list');
+  const icaos = Object.keys(aircraft).sort();
+  document.getElementById('hdr-count').textContent = icaos.length;
+
+  // Update or create rows
+  icaos.forEach(icao => {
+    const ac = aircraft[icao];
+    let row = document.getElementById('row-' + icao);
+    if (!row) {
+      row = document.createElement('div');
+      row.className = 'ac-row';
+      row.id = 'row-' + icao;
+      row.onclick = () => selectAircraft(icao);
+      list.appendChild(row);
+    }
+    if (icao === selectedICAO) row.classList.add('selected');
+    else row.classList.remove('selected');
+
+    const altFt = Math.round(ac.alt * 3.28084);
+    row.innerHTML = `
+      <div class="ac-icao">${icao}</div>
+      <div class="ac-meta">
+        ALT <span>${altFt.toLocaleString()} ft</span><br>
+        SENSORS <span>${ac.sensors}</span> · FIXES <span>${ac.fixes}</span>
+      </div>`;
+  });
+}
+
+function updateStats() {
+  const icaos = Object.keys(aircraft);
+  document.getElementById('stat-aircraft').textContent = icaos.length;
+  if (icaos.length === 0) return;
+
+  const avgSensors = (icaos.reduce((s, k) => s + aircraft[k].sensors, 0) / icaos.length).toFixed(1);
+  document.getElementById('stat-sensors').textContent = avgSensors;
+
+  const withCost = icaos.filter(k => aircraft[k].cost != null);
+  if (withCost.length > 0) {
+    const avgCost = withCost.reduce((s, k) => s + aircraft[k].cost, 0) / withCost.length;
+    document.getElementById('stat-quality').textContent = avgCost < 1e-6 ? 'HIGH' : avgCost < 1e-4 ? 'MED' : 'LOW';
+  }
+}
+
+function selectAircraft(icao) {
+  selectedICAO = icao;
+  const ac = aircraft[icao];
+  if (ac) map.panTo([ac.lat, ac.lon]);
+  refreshSidebar();
+}
+
+// ── Clock ──
+function updateClock() {
+  const now = new Date();
+  const h = now.getUTCHours().toString().padStart(2,'0');
+  const m = now.getUTCMinutes().toString().padStart(2,'0');
+  const s = now.getUTCSeconds().toString().padStart(2,'0');
+  document.getElementById('clock').textContent = `${h}:${m}:${s} UTC`;
+}
+setInterval(updateClock, 1000);
+updateClock();
+
+// ── Stale aircraft cleanup (remove if not seen for 60s) ──
+setInterval(() => {
+  const now = Date.now();
+  Object.keys(aircraft).forEach(icao => {
+    if (now - aircraft[icao].lastSeen > 60000) {
+      map.removeLayer(aircraft[icao].marker);
+      document.getElementById('row-' + icao)?.remove();
+      delete aircraft[icao];
+    }
+  });
+  refreshSidebar();
+  updateStats();
+  // Restore empty message if no aircraft remain
+  if (Object.keys(aircraft).length === 0 && !document.getElementById('empty-msg')) {
+    const msg = document.createElement('div');
+    msg.className = 'empty';
+    msg.id = 'empty-msg';
+    msg.innerHTML = 'Waiting for MLAT fixes...<br><br>Need ≥4 sensors to hear<br>the same aircraft within<br>600ms window.';
+    document.getElementById('aircraft-list').prepend(msg);
+  }
+}, 10000);
+
+// ── WebSocket connection ──
+function connect() {
+  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+  ws = new WebSocket(`${proto}://${location.host}/ws`);
+
+  ws.onopen = () => {
+    document.getElementById('conn-dot').classList.add('live');
+    document.getElementById('conn-status').textContent = 'LIVE';
+    if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
+  };
+
+  ws.onmessage = (e) => {
+    try {
+      const data = JSON.parse(e.data);
+      updateAircraft(data);
+    } catch(err) {
+      console.error('Parse error', err);
+    }
+  };
+
+  ws.onclose = () => {
+    document.getElementById('conn-dot').classList.remove('live');
+    document.getElementById('conn-status').textContent = 'RECONNECTING';
+    reconnectTimer = setTimeout(connect, 3000);
+  };
+
+  ws.onerror = () => ws.close();
+}
+
+connect();
+</script>
+</body>
+</html>
