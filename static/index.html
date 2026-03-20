@@ -104,7 +104,7 @@
 
     /* ── Sidebar ── */
     aside {
-      width: 280px;
+      width: 420px;
       background: var(--panel);
       border-left: 1px solid var(--border);
       display: flex;
@@ -125,9 +125,10 @@
     }
 
     #aircraft-list {
-      flex: 1;
+      flex: 1 1 38%;
       overflow-y: auto;
       padding: 4px 0;
+      min-height: 180px;
     }
 
     #aircraft-list::-webkit-scrollbar { width: 4px; }
@@ -135,10 +136,8 @@
     #aircraft-list::-webkit-scrollbar-thumb { background: var(--border); }
 
     .ac-row {
-      display: grid;
-      grid-template-columns: 80px 1fr;
-      gap: 4px;
-      padding: 8px 14px;
+      display: block;
+      padding: 10px 14px;
       border-bottom: 1px solid var(--border);
       cursor: pointer;
       transition: background 0.15s;
@@ -159,6 +158,54 @@
     }
     .ac-meta span { color: var(--text); }
 
+    .ac-top {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      margin-bottom: 6px;
+    }
+
+    .ac-badges {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+    }
+
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      padding: 2px 6px;
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      font-size: 0.58rem;
+      color: var(--text);
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      background: rgba(0,255,136,0.03);
+    }
+
+    .badge-dim {
+      color: var(--dim);
+    }
+
+    .list-section {
+      padding: 8px 14px 6px;
+      border-bottom: 1px solid var(--border);
+      font-size: 0.58rem;
+      color: var(--dim);
+      letter-spacing: 0.18em;
+      text-transform: uppercase;
+      background: rgba(0,255,136,0.02);
+    }
+
+    .list-note {
+      padding: 6px 14px 10px;
+      font-size: 0.62rem;
+      color: var(--dim);
+      border-bottom: 1px solid var(--border);
+    }
+
     /* Stats panel */
     .stats {
       border-top: 1px solid var(--border);
@@ -174,6 +221,121 @@
       color: var(--green);
       font-family: 'Rajdhani', sans-serif;
       font-weight: 700;
+    }
+
+    .detail-panel,
+    .network-panel {
+      border-top: 1px solid var(--border);
+      padding: 10px 14px;
+      overflow-y: auto;
+      min-height: 120px;
+      max-height: 220px;
+    }
+
+    .detail-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+      margin-bottom: 10px;
+    }
+
+    .detail-card {
+      border: 1px solid var(--border);
+      background: rgba(0, 255, 136, 0.03);
+      padding: 8px;
+    }
+
+    .detail-label,
+    .detail-subtitle {
+      font-size: 0.6rem;
+      color: var(--dim);
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+    }
+
+    .detail-value {
+      margin-top: 4px;
+      font-size: 0.95rem;
+      color: var(--green);
+      font-family: 'Rajdhani', sans-serif;
+      font-weight: 700;
+    }
+
+    .detail-subtitle {
+      margin: 10px 0 6px;
+    }
+
+    .sensor-row,
+    .seller-row {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 8px;
+      padding: 6px 0;
+      border-top: 1px solid rgba(10, 42, 26, 0.7);
+      font-size: 0.68rem;
+    }
+
+    .sensor-row:first-child,
+    .seller-row:first-child {
+      border-top: 0;
+    }
+
+    .sensor-name,
+    .seller-name {
+      color: var(--green);
+      letter-spacing: 0.08em;
+    }
+
+    .sensor-meta,
+    .seller-meta {
+      color: var(--dim);
+      line-height: 1.5;
+    }
+
+    .sensor-health,
+    .quality-pill {
+      padding: 2px 6px;
+      border: 1px solid var(--border);
+      font-size: 0.58rem;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      align-self: start;
+    }
+
+    .health-stable,
+    .quality-high {
+      color: var(--green);
+      border-color: rgba(0, 255, 136, 0.35);
+    }
+
+    .health-watch,
+    .quality-med {
+      color: var(--warn);
+      border-color: rgba(255, 170, 0, 0.35);
+    }
+
+    .health-unstable,
+    .quality-low {
+      color: var(--red);
+      border-color: rgba(255, 68, 85, 0.35);
+    }
+
+    .health-learning {
+      color: var(--dim);
+      border-color: var(--border);
+    }
+
+    .empty {
+      padding: 16px 14px;
+      font-size: 0.72rem;
+      color: var(--dim);
+      line-height: 1.8;
+    }
+
+    @media (max-width: 1100px) {
+      aside {
+        width: 340px;
+      }
     }
 
     /* ── Custom aircraft marker ── */
@@ -271,7 +433,7 @@
   </div>
 
   <aside>
-    <div class="panel-title">Live Aircraft</div>
+    <div class="panel-title">Live Aircraft / Waiting</div>
     <div id="aircraft-list">
       <div class="empty" id="empty-msg">
         Waiting for MLAT fixes...<br><br>
@@ -279,6 +441,14 @@
         the same aircraft within<br>
         600ms window.
       </div>
+    </div>
+    <div class="panel-title">Selected Track / Geometry</div>
+    <div id="detail-panel" class="detail-panel">
+      <div class="empty">Select an aircraft to inspect solver quality, uncertainty, and contributing sensors.</div>
+    </div>
+    <div class="panel-title">Network / Analytics</div>
+    <div id="network-panel" class="network-panel">
+      <div class="empty">Waiting for live telemetry from the buyer.</div>
     </div>
     <div class="stats">
       <div>
@@ -297,28 +467,53 @@
         <div class="stat-val" id="stat-quality">—</div>
         <div>Avg Quality</div>
       </div>
+      <div>
+        <div class="stat-val" id="stat-rate">0</div>
+        <div>Fixes / Min</div>
+      </div>
+      <div>
+        <div class="stat-val" id="stat-unc">—</div>
+        <div>Avg Uncertainty</div>
+      </div>
+      <div>
+        <div class="stat-val" id="stat-sellers">0</div>
+        <div>Sellers</div>
+      </div>
+      <div>
+        <div class="stat-val" id="stat-raw">0</div>
+        <div>Waiting Raw</div>
+      </div>
     </div>
   </aside>
 </div>
 
 <script>
-// ── State ──
-const aircraft = {};   // icao → { marker, lat, lon, alt, fixes, sensors, lastSeen }
+const aircraft = {};
+let waitingAircraft = [];
+let analytics = {};
+let sellers = [];
 let totalFixes = 0;
 let selectedICAO = null;
 let ws = null;
 let reconnectTimer = null;
+let connectedSellers = 0;
 
-// ── Map ──
-const map = L.map('map', { zoomControl: true, attributionControl: false })
-  .setView([51.5, 0], 6);
+const MAX_HISTORY_POINTS = 32;
+const MAX_COST = 2e-3;
+const MAX_GROUND_SPEED_MPS = 750;
+const MAX_UNCERTAINTY_M = 18000;
+const MIN_TRACK_SAMPLES_TO_DRAW = 1;
+const AIRCRAFT_RETENTION_MS = 10 * 60 * 1000;
+const STALE_AFTER_MS = 2 * 60 * 1000;
 
-L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-  maxZoom: 18
-}).addTo(map);
+const map = L.map('map', { zoomControl: true, attributionControl: false }).setView([51.5, 0], 6);
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 18 }).addTo(map);
 
-// ── Aircraft marker factory ──
-function makeIcon(icao) {
+const geometryLines = L.layerGroup().addTo(map);
+const geometrySensors = L.layerGroup().addTo(map);
+let uncertaintyCircle = null;
+
+function makeIcon() {
   return L.divIcon({
     className: '',
     html: `<div class="ac-marker"><div class="ac-ping"></div><div class="ac-dot"></div></div>`,
@@ -327,123 +522,442 @@ function makeIcon(icao) {
   });
 }
 
-// ── Update aircraft on map and sidebar ──
-function updateAircraft(data) {
-  const { icao, lat, lon, alt, cost, num_sensors } = data;
-  totalFixes++;
-  document.getElementById('hdr-fixes').textContent = totalFixes;
-  document.getElementById('stat-fixes').textContent = totalFixes;
+function makeTrail() {
+  return L.polyline([], {
+    color: '#00ff88',
+    weight: 2,
+    opacity: 0.4,
+    lineCap: 'round',
+    lineJoin: 'round',
+    dashArray: '2 10',
+  }).addTo(map);
+}
 
-  if (!aircraft[icao]) {
-    // New aircraft
-    const marker = L.marker([lat, lon], { icon: makeIcon(icao) })
+function haversineKm(lat1, lon1, lat2, lon2) {
+  const toRad = value => value * Math.PI / 180;
+  const R = 6371;
+  const dLat = toRad(lat2 - lat1);
+  const dLon = toRad(lon2 - lon1);
+  const a = Math.sin(dLat / 2) ** 2 +
+    Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon / 2) ** 2;
+  return 2 * R * Math.asin(Math.sqrt(a));
+}
+
+function qualityClass(label) {
+  switch ((label || '').toUpperCase()) {
+    case 'HIGH': return 'quality-high';
+    case 'MED': return 'quality-med';
+    default: return 'quality-low';
+  }
+}
+
+function healthClass(label) {
+  switch ((label || '').toLowerCase()) {
+    case 'stable': return 'health-stable';
+    case 'watch': return 'health-watch';
+    case 'unstable': return 'health-unstable';
+    default: return 'health-learning';
+  }
+}
+
+function shouldDisplayFix(data, existing) {
+  const {
+    lat, lon, cost, num_sensors, ground_speed_mps = 0,
+    track_samples = 0, uncertainty_m = 0, quality_score = 0
+  } = data;
+
+  if (![lat, lon, cost].every(Number.isFinite)) return false;
+  if (num_sensors < 4) return false;
+  if (cost > MAX_COST) return false;
+  if (ground_speed_mps > MAX_GROUND_SPEED_MPS) return false;
+  if (uncertainty_m && uncertainty_m > MAX_UNCERTAINTY_M) return false;
+  if (quality_score && quality_score < 20) return false;
+  if (!existing && track_samples < MIN_TRACK_SAMPLES_TO_DRAW) return false;
+  if (existing) {
+    const jumpKm = haversineKm(existing.lat, existing.lon, lat, lon);
+    if (existing.fixes > 3 && jumpKm > 180 && ground_speed_mps > 500 && cost > 1e-4) return false;
+  }
+  return true;
+}
+
+function upsertAircraft(data, { fromSnapshot = false } = {}) {
+  const { icao, lat, lon, alt, cost, num_sensors, ground_speed_mps = 0, track_samples = 0 } = data;
+  const existing = aircraft[icao];
+  if (!shouldDisplayFix(data, existing)) return false;
+
+  if (!existing) {
+    const marker = L.marker([lat, lon], { icon: makeIcon() })
       .bindTooltip(icao, { permanent: false, direction: 'top' })
       .addTo(map);
-
+    const trail = makeTrail();
     marker.on('click', () => selectAircraft(icao));
-    aircraft[icao] = { marker, lat, lon, alt, fixes: 0, sensors: num_sensors, lastSeen: Date.now() };
+    aircraft[icao] = {
+      marker,
+      trail,
+      history: [[lat, lon]],
+      fixes: 0,
+      lastSeen: Date.now(),
+    };
     document.getElementById('empty-msg')?.remove();
   } else {
-    aircraft[icao].marker.setLatLng([lat, lon]);
+    existing.marker.setLatLng([lat, lon]);
   }
 
-  aircraft[icao].lat = lat;
-  aircraft[icao].lon = lon;
-  aircraft[icao].alt = alt;
-  aircraft[icao].fixes++;
-  aircraft[icao].sensors = num_sensors;
-  aircraft[icao].lastSeen = Date.now();
-  aircraft[icao].cost = cost;
+  const target = aircraft[icao];
+  target.lat = lat;
+  target.lon = lon;
+  target.alt = alt;
+  target.cost = cost;
+  target.sensors = num_sensors;
+  target.speed = ground_speed_mps;
+  target.trackSamples = track_samples;
+  target.uncertainty = data.uncertainty_m || 0;
+  target.gdop = data.gdop || 0;
+  target.qualityScore = data.quality_score || 0;
+  target.qualityLabel = data.quality_label || 'LOW';
+  target.rmsResidual = data.rms_residual_m || 0;
+  target.contributors = data.contributors || [];
+  target.fixes = Math.max(target.fixes + (fromSnapshot ? 0 : 1), data.fixes || target.fixes);
+  target.lastSeen = Date.now();
+  target.lastSeenUnix = data.last_seen_unix || Math.floor(Date.now() / 1000);
+  target.stale = false;
+  target.history.push([lat, lon]);
+  if (target.history.length > MAX_HISTORY_POINTS) target.history.shift();
+  target.trail.setLatLngs(target.history);
+
+  if (selectedICAO === icao) {
+    renderSelection();
+  }
+  return true;
+}
+
+function updateAircraft(data) {
+  if (upsertAircraft(data)) {
+    totalFixes++;
+    document.getElementById('hdr-fixes').textContent = totalFixes;
+    document.getElementById('stat-fixes').textContent = totalFixes;
+    refreshSidebar();
+    updateStats();
+  }
+}
+
+function updateLiveState(state) {
+  connectedSellers = state.connected_sellers || 0;
+  waitingAircraft = state.waiting || [];
+  sellers = state.sellers || [];
+  analytics = state.analytics || {};
+
+  (state.active || []).forEach(item => upsertAircraft(item, { fromSnapshot: true }));
+
+  totalFixes = analytics.total_fixes || totalFixes;
+  document.getElementById('hdr-fixes').textContent = totalFixes;
+  document.getElementById('stat-fixes').textContent = totalFixes;
+  document.getElementById('stat-sellers').textContent = connectedSellers;
+  document.getElementById('stat-raw').textContent = state.raw_aircraft || 0;
+
+  if (!selectedICAO && (state.active || []).length > 0) {
+    selectedICAO = state.active[0].icao;
+  } else if (selectedICAO && !aircraft[selectedICAO] && (state.active || []).length > 0) {
+    selectedICAO = state.active[0].icao;
+  }
 
   refreshSidebar();
   updateStats();
+  renderNetworkPanel();
+  renderSelection();
 }
 
 function refreshSidebar() {
   const list = document.getElementById('aircraft-list');
-  const icaos = Object.keys(aircraft).sort();
-  document.getElementById('hdr-count').textContent = icaos.length;
-
-  // Update or create rows
-  icaos.forEach(icao => {
-    const ac = aircraft[icao];
-    let row = document.getElementById('row-' + icao);
-    if (!row) {
-      row = document.createElement('div');
-      row.className = 'ac-row';
-      row.id = 'row-' + icao;
-      row.onclick = () => selectAircraft(icao);
-      list.appendChild(row);
-    }
-    if (icao === selectedICAO) row.classList.add('selected');
-    else row.classList.remove('selected');
-
-    const altFt = Math.round(ac.alt * 3.28084);
-    row.innerHTML = `
-      <div class="ac-icao">${icao}</div>
-      <div class="ac-meta">
-        ALT <span>${altFt.toLocaleString()} ft</span><br>
-        SENSORS <span>${ac.sensors}</span> · FIXES <span>${ac.fixes}</span>
-      </div>`;
+  const fixedIcaos = Object.keys(aircraft).sort((a, b) => {
+    const delta = (aircraft[b].trackSamples || 0) - (aircraft[a].trackSamples || 0);
+    if (delta !== 0) return delta;
+    return a.localeCompare(b);
   });
+
+  document.getElementById('hdr-count').textContent = fixedIcaos.length;
+
+  const activeRows = fixedIcaos.map(icao => {
+    const ac = aircraft[icao];
+    const stale = Date.now() - ac.lastSeen > STALE_AFTER_MS;
+    const altFt = Math.round((ac.alt || 0) * 3.28084);
+    return {
+      id: 'row-' + icao,
+      icao,
+      clickable: true,
+      html: `
+        <div class="ac-top">
+          <div class="ac-icao">${icao}</div>
+          <div class="badge ${qualityClass(ac.qualityLabel)}">${ac.qualityLabel || 'LOW'}</div>
+        </div>
+        <div class="ac-badges">
+          <div class="badge">Alt ${altFt.toLocaleString()}ft</div>
+          <div class="badge">Sensors ${ac.sensors}</div>
+          <div class="badge">Track ${ac.trackSamples || 0}</div>
+          <div class="badge">Unc ${Math.round(ac.uncertainty || 0)}m</div>
+          <div class="badge ${stale ? 'badge-dim' : ''}">${stale ? 'Stale' : 'Live'}</div>
+        </div>
+        <div class="ac-meta">
+          Fixes <span>${ac.fixes}</span> · Speed <span>${Math.round(ac.speed || 0)} m/s</span> · GDOP <span>${Number.isFinite(ac.gdop) ? ac.gdop.toFixed(2) : '—'}</span>
+        </div>`,
+    };
+  });
+
+  const waitingRows = waitingAircraft.filter(item => !aircraft[item.icao]).map(item => {
+    return {
+      id: 'wait-' + item.icao,
+      icao: item.icao,
+      clickable: false,
+      html: `
+        <div class="ac-top">
+          <div class="ac-icao">${item.icao}</div>
+          <div class="badge badge-dim">Waiting</div>
+        </div>
+        <div class="ac-badges">
+          <div class="badge">Sensors ${item.sensors}/4</div>
+          <div class="badge">Frames ${item.frames}</div>
+          <div class="badge">Sellers ${connectedSellers}</div>
+        </div>
+        <div class="ac-meta">
+          Last seen <span>${new Date(item.last_seen_utc).toLocaleTimeString()}</span>
+        </div>`,
+    };
+  });
+
+  list.innerHTML = '';
+  if (activeRows.length === 0 && waitingRows.length === 0) {
+    list.innerHTML = `<div class="empty" id="empty-msg">
+      Waiting for MLAT fixes...<br><br>
+      Connected sellers: <span style="color:var(--green)">${connectedSellers}</span><br>
+      Need ≥4 sensors to hear<br>
+      the same aircraft within<br>
+      600ms window.
+    </div>`;
+    return;
+  }
+
+  const activeLimit = 8;
+  const waitingLimit = 6;
+
+  if (activeRows.length > 0) {
+    const section = document.createElement('div');
+    section.className = 'list-section';
+    section.textContent = `Tracked Aircraft (${activeRows.length})`;
+    list.appendChild(section);
+
+    activeRows.slice(0, activeLimit).forEach(item => {
+      const row = document.createElement('div');
+      row.className = 'ac-row';
+      row.id = item.id;
+      row.onclick = () => selectAircraft(item.icao);
+      if (item.icao === selectedICAO) row.classList.add('selected');
+      row.innerHTML = item.html;
+      list.appendChild(row);
+    });
+
+    if (activeRows.length > activeLimit) {
+      const note = document.createElement('div');
+      note.className = 'list-note';
+      note.textContent = `Showing ${activeLimit} of ${activeRows.length} active tracks. Click a marker on the map to inspect others.`;
+      list.appendChild(note);
+    }
+  }
+
+  if (waitingRows.length > 0) {
+    const section = document.createElement('div');
+    section.className = 'list-section';
+    section.textContent = `Waiting Groups (${waitingRows.length})`;
+    list.appendChild(section);
+
+    waitingRows.slice(0, waitingLimit).forEach(item => {
+      const row = document.createElement('div');
+      row.className = 'ac-row';
+      row.id = item.id;
+      row.innerHTML = item.html;
+      list.appendChild(row);
+    });
+
+    if (waitingRows.length > waitingLimit) {
+      const note = document.createElement('div');
+      note.className = 'list-note';
+      note.textContent = `Showing ${waitingLimit} of ${waitingRows.length} waiting aircraft.`;
+      list.appendChild(note);
+    }
+  }
 }
 
 function updateStats() {
   const icaos = Object.keys(aircraft);
-  document.getElementById('stat-aircraft').textContent = icaos.length;
-  if (icaos.length === 0) return;
+  document.getElementById('stat-aircraft').textContent = analytics.tracked_aircraft || icaos.length;
+  document.getElementById('stat-sellers').textContent = connectedSellers;
+  document.getElementById('stat-raw').textContent = waitingAircraft.filter(item => !aircraft[item.icao]).length;
+  document.getElementById('stat-rate').textContent = Math.round(analytics.fix_rate_per_min || 0);
+  document.getElementById('stat-unc').textContent = analytics.avg_uncertainty_m ? `${Math.round(analytics.avg_uncertainty_m)}m` : '—';
+  document.getElementById('stat-fixes').textContent = analytics.total_fixes || totalFixes;
 
-  const avgSensors = (icaos.reduce((s, k) => s + aircraft[k].sensors, 0) / icaos.length).toFixed(1);
-  document.getElementById('stat-sensors').textContent = avgSensors;
-
-  const withCost = icaos.filter(k => aircraft[k].cost != null);
-  if (withCost.length > 0) {
-    const avgCost = withCost.reduce((s, k) => s + aircraft[k].cost, 0) / withCost.length;
-    document.getElementById('stat-quality').textContent = avgCost < 1e-6 ? 'HIGH' : avgCost < 1e-4 ? 'MED' : 'LOW';
+  if ((analytics.avg_sensors || 0) > 0) {
+    document.getElementById('stat-sensors').textContent = analytics.avg_sensors.toFixed(1);
+  } else if (icaos.length > 0) {
+    const avgSensors = (icaos.reduce((s, k) => s + aircraft[k].sensors, 0) / icaos.length).toFixed(1);
+    document.getElementById('stat-sensors').textContent = avgSensors;
   }
+
+  document.getElementById('stat-quality').textContent = analytics.quality_label || '—';
+}
+
+function renderSelection() {
+  const panel = document.getElementById('detail-panel');
+  geometryLines.clearLayers();
+  geometrySensors.clearLayers();
+  if (uncertaintyCircle) {
+    map.removeLayer(uncertaintyCircle);
+    uncertaintyCircle = null;
+  }
+
+  const ac = selectedICAO ? aircraft[selectedICAO] : null;
+  if (!ac) {
+    panel.innerHTML = '<div class="empty">Select an aircraft to inspect solver quality, uncertainty, and contributing sensors.</div>';
+    return;
+  }
+
+  const quality = ac.qualityLabel || 'LOW';
+  panel.innerHTML = `
+    <div class="detail-grid">
+      <div class="detail-card">
+        <div class="detail-label">Quality</div>
+        <div class="detail-value">${quality}</div>
+      </div>
+      <div class="detail-card">
+        <div class="detail-label">Uncertainty</div>
+        <div class="detail-value">${Math.round(ac.uncertainty || 0)} m</div>
+      </div>
+      <div class="detail-card">
+        <div class="detail-label">GDOP</div>
+        <div class="detail-value">${Number.isFinite(ac.gdop) ? ac.gdop.toFixed(2) : '—'}</div>
+      </div>
+      <div class="detail-card">
+        <div class="detail-label">Track / Speed</div>
+        <div class="detail-value">${ac.trackSamples || 0} · ${Math.round(ac.speed || 0)} m/s</div>
+      </div>
+    </div>
+    <div class="detail-subtitle">MLAT Geometry</div>
+    <div class="sensor-list">
+      ${(ac.contributors || []).map(sensor => `
+        <div class="sensor-row">
+          <div>
+            <div class="sensor-name">${sensor.sensor_name || ('S-' + sensor.sensor_id)}</div>
+            <div class="sensor-meta">
+              RESIDUAL ${Math.round(sensor.residual_m || 0)} m · CLOCK ${Math.round(sensor.clock_adjustment_ns || 0)} ns<br>
+              JITTER ${Math.round(sensor.clock_jitter_ns || 0)} ns · SAMPLES ${sensor.clock_samples || 0}
+            </div>
+          </div>
+          <div class="sensor-health ${healthClass(sensor.clock_health)}">${sensor.clock_health || 'learning'}</div>
+        </div>
+      `).join('') || '<div class="empty">Waiting for contributor diagnostics.</div>'}
+    </div>
+  `;
+
+  if ((ac.contributors || []).length > 0) {
+    ac.contributors.forEach(sensor => {
+      const color = sensor.clock_health === 'unstable' ? '#ff4455' : sensor.clock_health === 'watch' ? '#ffaa00' : '#00ff88';
+      L.polyline([[ac.lat, ac.lon], [sensor.lat, sensor.lon]], {
+        color,
+        weight: 1.5,
+        opacity: 0.22,
+        dashArray: '4 8',
+      }).addTo(geometryLines);
+      L.circleMarker([sensor.lat, sensor.lon], {
+        radius: 4,
+        color,
+        weight: 1,
+        fillOpacity: 0.85,
+      }).bindTooltip(`${sensor.sensor_name || sensor.sensor_id}<br>Residual ${Math.round(sensor.residual_m || 0)}m`).addTo(geometrySensors);
+    });
+  }
+
+  if (ac.uncertainty > 0) {
+    uncertaintyCircle = L.circle([ac.lat, ac.lon], {
+      radius: ac.uncertainty,
+      color: '#00ff88',
+      opacity: 0.3,
+      fillOpacity: 0.04,
+      weight: 1,
+    }).addTo(map);
+  }
+}
+
+function renderNetworkPanel() {
+  const panel = document.getElementById('network-panel');
+  panel.innerHTML = `
+    <div class="detail-grid">
+      <div class="detail-card">
+        <div class="detail-label">Fix Rate</div>
+        <div class="detail-value">${Math.round(analytics.fix_rate_per_min || 0)} / min</div>
+      </div>
+      <div class="detail-card">
+        <div class="detail-label">Avg GDOP</div>
+        <div class="detail-value">${analytics.avg_gdop ? analytics.avg_gdop.toFixed(2) : '—'}</div>
+      </div>
+      <div class="detail-card">
+        <div class="detail-label">Avg Quality</div>
+        <div class="detail-value">${analytics.quality_label || '—'}</div>
+      </div>
+      <div class="detail-card">
+        <div class="detail-label">Tracked / Waiting</div>
+        <div class="detail-value">${analytics.tracked_aircraft || 0} / ${waitingAircraft.length}</div>
+      </div>
+    </div>
+    <div class="detail-subtitle">Connected Sellers</div>
+    ${(sellers || []).slice(0, 5).map(seller => `
+      <div class="seller-row">
+        <div>
+          <div class="seller-name">${seller.name || seller.peer_id}</div>
+          <div class="seller-meta">${seller.peer_id.slice(0, 12)}...<br>Connected ${new Date(seller.connected_since).toLocaleTimeString()}</div>
+        </div>
+        <div class="quality-pill quality-high">LIVE</div>
+      </div>
+    `).join('') || '<div class="empty">Waiting for seller telemetry.</div>'}
+  `;
 }
 
 function selectAircraft(icao) {
   selectedICAO = icao;
   const ac = aircraft[icao];
-  if (ac) map.panTo([ac.lat, ac.lon]);
+  if (ac) {
+    map.panTo([ac.lat, ac.lon]);
+    if (ac.history.length > 1) {
+      map.fitBounds(ac.trail.getBounds(), { padding: [80, 80], maxZoom: 10 });
+    }
+  }
   refreshSidebar();
+  renderSelection();
 }
 
-// ── Clock ──
 function updateClock() {
   const now = new Date();
-  const h = now.getUTCHours().toString().padStart(2,'0');
-  const m = now.getUTCMinutes().toString().padStart(2,'0');
-  const s = now.getUTCSeconds().toString().padStart(2,'0');
+  const h = now.getUTCHours().toString().padStart(2, '0');
+  const m = now.getUTCMinutes().toString().padStart(2, '0');
+  const s = now.getUTCSeconds().toString().padStart(2, '0');
   document.getElementById('clock').textContent = `${h}:${m}:${s} UTC`;
 }
 setInterval(updateClock, 1000);
 updateClock();
 
-// ── Stale aircraft cleanup (remove if not seen for 60s) ──
 setInterval(() => {
   const now = Date.now();
   Object.keys(aircraft).forEach(icao => {
-    if (now - aircraft[icao].lastSeen > 60000) {
+    if (now - aircraft[icao].lastSeen > AIRCRAFT_RETENTION_MS) {
       map.removeLayer(aircraft[icao].marker);
-      document.getElementById('row-' + icao)?.remove();
+      map.removeLayer(aircraft[icao].trail);
       delete aircraft[icao];
+      if (selectedICAO === icao) selectedICAO = null;
     }
   });
   refreshSidebar();
   updateStats();
-  // Restore empty message if no aircraft remain
-  if (Object.keys(aircraft).length === 0 && !document.getElementById('empty-msg')) {
-    const msg = document.createElement('div');
-    msg.className = 'empty';
-    msg.id = 'empty-msg';
-    msg.innerHTML = 'Waiting for MLAT fixes...<br><br>Need ≥4 sensors to hear<br>the same aircraft within<br>600ms window.';
-    document.getElementById('aircraft-list').prepend(msg);
-  }
+  renderSelection();
 }, 10000);
 
-// ── WebSocket connection ──
 function connect() {
   const proto = location.protocol === 'https:' ? 'wss' : 'ws';
   ws = new WebSocket(`${proto}://${location.host}/ws`);
@@ -451,14 +965,27 @@ function connect() {
   ws.onopen = () => {
     document.getElementById('conn-dot').classList.add('live');
     document.getElementById('conn-status').textContent = 'LIVE';
-    if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
+    if (reconnectTimer) {
+      clearTimeout(reconnectTimer);
+      reconnectTimer = null;
+    }
   };
 
   ws.onmessage = (e) => {
     try {
-      const data = JSON.parse(e.data);
-      updateAircraft(data);
-    } catch(err) {
+      const message = JSON.parse(e.data);
+      if (message.type === 'fix') {
+        updateAircraft(message.data);
+        return;
+      }
+      if (message.type === 'state') {
+        updateLiveState(message.data);
+        return;
+      }
+      if (message.icao) {
+        updateAircraft(message);
+      }
+    } catch (err) {
       console.error('Parse error', err);
     }
   };
