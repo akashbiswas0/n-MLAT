@@ -15,11 +15,24 @@ const (
 	maxResidualUpdateNs   = 8_000_000.0
 	maxReliableJitterNs   = 2_500_000.0
 	minReliableSamples    = 6
+	minTrustedScore       = 35.0
 )
 
 type ClockCalibrator struct {
 	mu      sync.RWMutex
 	sensors map[int64]*ClockState
+	pairs   map[sensorPairKey]*PairOffsetState
+}
+
+type sensorPairKey struct {
+	A int64
+	B int64
+}
+
+type PairOffsetState struct {
+	OffsetNs float64
+	JitterNs float64
+	Samples  int
 }
 
 type ClockState struct {
@@ -30,6 +43,8 @@ type ClockState struct {
 	LastMeasuredCorrectionNs float64
 	JitterNs                 float64
 	LastResidualNs           float64
+	ResidualEMAAbsNs         float64
+	TrustScore               float64
 	Samples                  int
 }
 
@@ -41,11 +56,14 @@ type ClockDiagnostic struct {
 	Samples    int     `json:"samples"`
 	Health     string  `json:"health"`
 	Adjustment float64 `json:"adjustment_ns"`
+	TrustScore float64 `json:"trust_score"`
+	TrustLabel string  `json:"trust_label"`
 }
 
 func NewClockCalibrator() *ClockCalibrator {
 	return &ClockCalibrator{
 		sensors: make(map[int64]*ClockState),
+		pairs:   make(map[sensorPairKey]*PairOffsetState),
 	}
 }
 
@@ -58,12 +76,16 @@ func (c *ClockCalibrator) Apply(obs []Observation) []Observation {
 	for i, observation := range obs {
 		calibrated[i] = observation
 		if state, ok := c.sensors[observation.SensorID]; ok {
-			calibrated[i].TimestampAdjustmentNs = state.correction(float64(observation.TimestampNs()))
-			if state.reliable() {
+			baseCorrection := state.correction(float64(observation.TimestampNs()))
+			calibrated[i].TimestampAdjustmentNs = c.consensusCorrection(i, obs, baseCorrection)
+			calibrated[i].SellerScore = state.score()
+			if state.reliable() && state.score() >= minTrustedScore {
 				reliableIdx = append(reliableIdx, i)
 			}
 			continue
 		}
+		calibrated[i].TimestampAdjustmentNs = c.consensusCorrection(i, obs, 0)
+		calibrated[i].SellerScore = 70
 		reliableIdx = append(reliableIdx, i)
 	}
 
@@ -85,6 +107,8 @@ func (c *ClockCalibrator) Update(obs []Observation, result *MLATResult) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
+	refPos := GeodeticToECEF(result.Lat, result.Lon, result.Alt)
+
 	for _, observation := range obs {
 		residualSec, ok := result.SensorResidualSec[observation.SensorID]
 		if !ok {
@@ -105,6 +129,8 @@ func (c *ClockCalibrator) Update(obs []Observation, result *MLATResult) {
 				LastMeasuredCorrectionNs: measuredCorrectionNs,
 				JitterNs:                 math.Abs(residualNs),
 				LastResidualNs:           residualNs,
+				ResidualEMAAbsNs:         math.Abs(residualNs),
+				TrustScore:               70,
 				Samples:                  1,
 			}
 			continue
@@ -114,7 +140,9 @@ func (c *ClockCalibrator) Update(obs []Observation, result *MLATResult) {
 		predictedCorrectionNs := state.correction(rawTimestampNs)
 		correctionErrorNs := measuredCorrectionNs - predictedCorrectionNs
 		state.JitterNs = blend(state.JitterNs, math.Abs(correctionErrorNs), clockJitterBlend)
+		state.ResidualEMAAbsNs = blend(state.ResidualEMAAbsNs, math.Abs(residualNs), 0.2)
 		if math.Abs(residualNs) > maxResidualUpdateNs {
+			state.TrustScore = state.computeTrust()
 			continue
 		}
 
@@ -128,7 +156,10 @@ func (c *ClockCalibrator) Update(obs []Observation, result *MLATResult) {
 		state.LastTimestampNs = rawTimestampNs
 		state.LastMeasuredCorrectionNs = measuredCorrectionNs
 		state.Samples++
+		state.TrustScore = state.computeTrust()
 	}
+
+	c.updatePairOffsets(obs, result, refPos)
 }
 
 func (c *ClockCalibrator) DecorateContributors(contributors []SensorContribution) []SensorContribution {
@@ -147,6 +178,8 @@ func (c *ClockCalibrator) DecorateContributors(contributors []SensorContribution
 		annotated[i].ClockJitterNs = state.JitterNs
 		annotated[i].ClockSamples = state.Samples
 		annotated[i].ClockHealth = state.health()
+		annotated[i].SellerScore = state.score()
+		annotated[i].TrustLabel = trustLabelForScore(state.score())
 	}
 	return annotated
 }
@@ -173,9 +206,89 @@ func (c *ClockCalibrator) Snapshot(sensorIDs []int64) []ClockDiagnostic {
 			Samples:    state.Samples,
 			Health:     state.health(),
 			Adjustment: state.OffsetNs,
+			TrustScore: state.score(),
+			TrustLabel: trustLabelForScore(state.score()),
 		})
 	}
 	return diagnostics
+}
+
+func (c *ClockCalibrator) consensusCorrection(idx int, obs []Observation, baseCorrection float64) float64 {
+	if idx < 0 || idx >= len(obs) {
+		return baseCorrection
+	}
+
+	estimates := []float64{baseCorrection}
+	weights := []float64{1.0}
+	for j, peer := range obs {
+		if j == idx {
+			continue
+		}
+		peerState, ok := c.sensors[peer.SensorID]
+		if !ok || !peerState.reliable() {
+			continue
+		}
+		pair, ok := c.pairs[pairKey(obs[idx].SensorID, peer.SensorID)]
+		if !ok || pair.Samples < 4 {
+			continue
+		}
+		pairOffset := pair.OffsetNs
+		if obs[idx].SensorID > peer.SensorID {
+			pairOffset = -pairOffset
+		}
+		peerCorrection := peerState.correction(float64(peer.TimestampNs()))
+		estimate := peerCorrection - pairOffset
+		weight := clampFloat(float64(pair.Samples)/20.0, 0.2, 1.0) * clampFloat(1-pair.JitterNs/3_000_000, 0.2, 1.0)
+		estimates = append(estimates, estimate)
+		weights = append(weights, weight)
+	}
+
+	total := 0.0
+	weightTotal := 0.0
+	for i, estimate := range estimates {
+		total += estimate * weights[i]
+		weightTotal += weights[i]
+	}
+	if weightTotal == 0 {
+		return baseCorrection
+	}
+	return total / weightTotal
+}
+
+func (c *ClockCalibrator) updatePairOffsets(obs []Observation, result *MLATResult, refPos Vec3) {
+	for i := 0; i < len(obs); i++ {
+		for j := i + 1; j < len(obs); j++ {
+			a := obs[i]
+			b := obs[j]
+			aPos := GeodeticToECEF(a.SensorLat, a.SensorLon, a.SensorAlt)
+			bPos := GeodeticToECEF(b.SensorLat, b.SensorLon, b.SensorAlt)
+			expectedDeltaNs := ((refPos.Dist(aPos) - refPos.Dist(bPos)) / C) * 1e9
+			observedDeltaNs := float64(a.TimestampNs()-b.TimestampNs()) + a.TimestampAdjustmentNs - b.TimestampAdjustmentNs
+			offsetNs := observedDeltaNs - expectedDeltaNs
+
+			key := pairKey(a.SensorID, b.SensorID)
+			pair, ok := c.pairs[key]
+			if !ok {
+				c.pairs[key] = &PairOffsetState{
+					OffsetNs: offsetNs,
+					JitterNs: 0,
+					Samples:  1,
+				}
+				continue
+			}
+			errNs := offsetNs - pair.OffsetNs
+			pair.JitterNs = blend(pair.JitterNs, math.Abs(errNs), 0.2)
+			pair.OffsetNs = blend(pair.OffsetNs, offsetNs, 0.18)
+			pair.Samples++
+		}
+	}
+}
+
+func pairKey(a, b int64) sensorPairKey {
+	if a < b {
+		return sensorPairKey{A: a, B: b}
+	}
+	return sensorPairKey{A: b, B: a}
 }
 
 func (s *ClockState) correction(rawTimestampNs float64) float64 {
@@ -184,6 +297,13 @@ func (s *ClockState) correction(rawTimestampNs float64) float64 {
 
 func (s *ClockState) reliable() bool {
 	return s.Samples < minReliableSamples || s.JitterNs <= maxReliableJitterNs
+}
+
+func (s *ClockState) score() float64 {
+	if s.TrustScore == 0 {
+		return 70
+	}
+	return s.TrustScore
 }
 
 func (s *ClockState) health() string {
@@ -196,6 +316,24 @@ func (s *ClockState) health() string {
 		return "watch"
 	default:
 		return "unstable"
+	}
+}
+
+func (s *ClockState) computeTrust() float64 {
+	jitterScore := clampFloat(1-s.JitterNs/3_000_000, 0, 1)
+	residualScore := clampFloat(1-s.ResidualEMAAbsNs/2_500_000, 0, 1)
+	sampleScore := clampFloat(float64(s.Samples)/18.0, 0, 1)
+	return 100 * (0.4*jitterScore + 0.4*residualScore + 0.2*sampleScore)
+}
+
+func trustLabelForScore(score float64) string {
+	switch {
+	case score >= 75:
+		return "VERIFIED"
+	case score >= 50:
+		return "WATCH"
+	default:
+		return "LOW"
 	}
 }
 
