@@ -13,11 +13,11 @@
 
 ## Project Layout
 
-- [main.go](/Users/akash/hedera/main.go): app entrypoint, packet ingest, MLAT pipeline wiring
-- [mlat](/Users/akash/hedera/mlat): observation correlation, coordinate transforms, solver, seller location overrides
-- [server](/Users/akash/hedera/server): HTTP + WebSocket map backend
-- [static](/Users/akash/hedera/static): browser map UI assets
-- [hedera-main](/Users/akash/hedera/hedera-main): optional Hedera audit publisher
+- `main.go`: app entrypoint, packet ingest, MLAT pipeline wiring
+- `mlat/`: observation correlation, coordinate transforms, solver, seller location overrides
+- `server/`: HTTP + WebSocket map backend
+- `static/`: browser map UI assets
+- `hedera-main/`: optional Hedera audit publisher
 
 ## Requirements
 
@@ -33,7 +33,7 @@ If your home connection is behind CGNAT, run the buyer on a VPS with a public IP
 The repo intentionally does **not** track real override data.
 
 1. Create `.buyer-env` with the credentials you received from the challenge organizers.
-2. Copy [location-override.example.json](/Users/akash/hedera/location-override.example.json) to `location-override.json`.
+2. Copy `location-override.example.json` to `location-override.json`.
 3. Replace the placeholder entries with the real seller public keys and true sensor coordinates.
 
 Example:
