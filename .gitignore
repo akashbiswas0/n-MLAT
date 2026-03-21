@@ -33,4 +33,5 @@ Thumbs.db
 # Backup files
 *.bak
 
+# Local seller location overrides; keep the real file out of Git.
 location-override.json

@@ -1,0 +1,9 @@
+[
+  {
+    "public_key": "02examplepublickeyhex",
+    "lat": 50.123456,
+    "lon": -5.123456,
+    "alt": 100.0,
+    "name": "example-seller"
+  }
+]
