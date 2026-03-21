@@ -2,6 +2,7 @@ package mlat
 
 import (
 	"encoding/json"
+	"fmt"
 	"log"
 	"os"
 )
@@ -16,36 +17,42 @@ type LocationOverride struct {
 
 var overrideMap map[string]LocationOverride
 
-func LoadLocationOverrides(path string) {
+func LoadLocationOverrides(path string) error {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		log.Printf("⚠  No location overrides loaded: %v", err)
 		overrideMap = make(map[string]LocationOverride)
-		return
+		return fmt.Errorf("read location overrides: %w", err)
 	}
 	var overrides []LocationOverride
 	if err := json.Unmarshal(data, &overrides); err != nil {
-		log.Printf("⚠  Failed to parse location overrides: %v", err)
 		overrideMap = make(map[string]LocationOverride)
-		return
+		return fmt.Errorf("parse location overrides: %w", err)
 	}
 	overrideMap = make(map[string]LocationOverride)
 	for _, o := range overrides {
+		if o.PublicKey == "" {
+			return fmt.Errorf("location override missing public_key")
+		}
 		overrideMap[o.PublicKey] = o
 	}
+	if len(overrideMap) == 0 {
+		return fmt.Errorf("no location overrides loaded")
+	}
 	log.Printf("✅ Loaded %d location overrides", len(overrideMap))
+	return nil
 }
 
-func ApplyOverride(publicKey string, lat, lon, alt float64) (float64, float64, float64) {
-	if o, ok := overrideMap[publicKey]; ok {
-		return o.Lat, o.Lon, o.Alt
-	}
-	return lat, lon, alt
+func OverrideForKey(publicKey string) (LocationOverride, bool) {
+	o, ok := overrideMap[publicKey]
+	return o, ok
 }
 
 func NameForKey(publicKey string) string {
 	if o, ok := overrideMap[publicKey]; ok {
 		return o.Name
+	}
+	if len(publicKey) < 8 {
+		return publicKey
 	}
 	return publicKey[:8] + "..."
 }
