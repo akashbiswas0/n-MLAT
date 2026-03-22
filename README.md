@@ -48,18 +48,21 @@ This project is designed to satisfy the core challenge requirements:
 ## System Architecture
 
 ```mermaid
-flowchart LR
+flowchart TD
     A["Neuron Sellers"] --> B["Live Raw Mode-S Observations"]
     B --> C["libp2p / QUIC Transport"]
     C --> D["Buyer Node"]
+
     D --> E["Observation Correlation"]
     E --> F["Clock Calibration"]
     F --> G["GDOP-Aware Subset Selection"]
     G --> H["Robust MLAT Solve"]
     H --> I["Kalman Trajectory Tracking"]
     I --> J["Trust Scoring / Analytics"]
+
     J --> K["WebSocket Broadcast"]
     K --> L["Browser UI"]
+
     J --> M["Optional HCS Audit Publishing"]
 ```
 
