@@ -47,20 +47,20 @@ This project is designed to satisfy the core challenge requirements:
 
 ## System Architecture
 
-```text
-Neuron sellers
-  -> live raw Mode-S observations
-  -> libp2p / QUIC transport
-  -> buyer node
-       -> observation correlation
-       -> clock calibration
-       -> GDOP-aware subset selection
-       -> robust MLAT solve
-       -> Kalman trajectory tracking
-       -> trust scoring / analytics
-       -> WebSocket broadcast
-       -> browser UI
-       -> optional HCS audit publishing
+```mermaid
+flowchart LR
+    A["Neuron Sellers"] --> B["Live Raw Mode-S Observations"]
+    B --> C["libp2p / QUIC Transport"]
+    C --> D["Buyer Node"]
+    D --> E["Observation Correlation"]
+    E --> F["Clock Calibration"]
+    F --> G["GDOP-Aware Subset Selection"]
+    G --> H["Robust MLAT Solve"]
+    H --> I["Kalman Trajectory Tracking"]
+    I --> J["Trust Scoring / Analytics"]
+    J --> K["WebSocket Broadcast"]
+    K --> L["Browser UI"]
+    J --> M["Optional HCS Audit Publishing"]
 ```
 
 ### Main Components
