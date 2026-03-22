@@ -11,6 +11,7 @@
   <style>
     :root {
       --green:  #00ff88;
+      --blue:   #4db8ff;
       --dimgreen: #00cc66;
       --bg:     #040d0a;
       --panel:  #060f0c;
@@ -120,8 +121,17 @@
       font-size: 0.7rem;
       letter-spacing: 0.2em;
       color: var(--dim);
-      border-bottom: 1px solid var(--border);
+      border-bottom: 2px solid rgba(10, 42, 26, 0.95);
+      background: linear-gradient(180deg, rgba(0,255,136,0.035), rgba(0,255,136,0.015));
+      box-shadow: inset 0 1px 0 rgba(0,255,136,0.06);
       text-transform: uppercase;
+    }
+
+    aside > .panel-title:not(:first-of-type) {
+      border-top: 2px solid rgba(0, 255, 136, 0.14);
+      box-shadow:
+        inset 0 1px 0 rgba(0,255,136,0.05),
+        0 -1px 0 rgba(0,0,0,0.35);
     }
 
     #aircraft-list {
@@ -208,13 +218,14 @@
 
     /* Stats panel */
     .stats {
-      border-top: 1px solid var(--border);
+      border-top: 2px solid rgba(0, 255, 136, 0.14);
       padding: 10px 14px;
       font-size: 0.65rem;
       color: var(--dim);
       display: grid;
       grid-template-columns: 1fr 1fr;
       gap: 6px;
+      box-shadow: inset 0 1px 0 rgba(0,255,136,0.05);
     }
     .stat-val {
       font-size: 1.1rem;
@@ -225,11 +236,12 @@
 
     .detail-panel,
     .network-panel {
-      border-top: 1px solid var(--border);
+      border-top: 2px solid rgba(0, 255, 136, 0.14);
       padding: 10px 14px;
       overflow-y: auto;
       min-height: 120px;
       max-height: 220px;
+      box-shadow: inset 0 1px 0 rgba(0,255,136,0.05);
     }
 
     .detail-grid {
@@ -303,19 +315,22 @@
     }
 
     .health-stable,
-    .quality-high {
+    .quality-high,
+    .trust-verified {
       color: var(--green);
       border-color: rgba(0, 255, 136, 0.35);
     }
 
     .health-watch,
-    .quality-med {
+    .quality-med,
+    .trust-watch {
       color: var(--warn);
       border-color: rgba(255, 170, 0, 0.35);
     }
 
     .health-unstable,
-    .quality-low {
+    .quality-low,
+    .trust-low {
       color: var(--red);
       border-color: rgba(255, 68, 85, 0.35);
     }
@@ -349,9 +364,9 @@
       top: 50%; left: 50%;
       transform: translate(-50%, -50%);
       width: 8px; height: 8px;
-      background: var(--green);
+      background: var(--blue);
       border-radius: 50%;
-      box-shadow: 0 0 6px var(--green), 0 0 12px rgba(0,255,136,0.4);
+      box-shadow: 0 0 8px var(--blue), 0 0 16px rgba(77,184,255,0.45);
     }
     .ac-ping {
       position: absolute;
@@ -359,7 +374,7 @@
       transform: translate(-50%, -50%);
       width: 8px; height: 8px;
       border-radius: 50%;
-      border: 1px solid var(--green);
+      border: 1px solid var(--blue);
       animation: ping 1.5s ease-out infinite;
     }
     @keyframes ping {
@@ -511,7 +526,7 @@ L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 18 
 
 const geometryLines = L.layerGroup().addTo(map);
 const geometrySensors = L.layerGroup().addTo(map);
-let uncertaintyCircle = null;
+let uncertaintyEllipse = null;
 
 function makeIcon() {
   return L.divIcon({
@@ -533,6 +548,91 @@ function makeTrail() {
   }).addTo(map);
 }
 
+function clamp(value, min, max) {
+  return Math.max(min, Math.min(max, value));
+}
+
+function ellipsePoint(lat, lon, eastM, northM) {
+  const latScale = 110540;
+  const lonScale = 111320 * Math.cos(lat * Math.PI / 180);
+  return [
+    lat + (northM / latScale),
+    lon + (eastM / Math.max(lonScale, 1e-6)),
+  ];
+}
+
+function buildUncertaintyEllipse(ac) {
+  const base = Math.max(ac.uncertainty || 0, 150);
+  const contributors = ac.contributors || [];
+  if (contributors.length < 2) {
+    return { semiMajor: base * 1.15, semiMinor: base * 0.85, angleDeg: 0 };
+  }
+
+  const lat0 = ac.lat;
+  const lon0 = ac.lon;
+  let totalWeight = 0;
+  let xx = 0;
+  let xy = 0;
+  let yy = 0;
+
+  contributors.forEach(sensor => {
+    const weight = clamp((sensor.seller_score || 70) / 100, 0.25, 1.0);
+    const east = (sensor.lon - lon0) * 111320 * Math.cos(lat0 * Math.PI / 180);
+    const north = (sensor.lat - lat0) * 110540;
+    xx += weight * east * east;
+    xy += weight * east * north;
+    yy += weight * north * north;
+    totalWeight += weight;
+  });
+
+  if (!totalWeight || (!xx && !yy)) {
+    return { semiMajor: base * 1.15, semiMinor: base * 0.85, angleDeg: 0 };
+  }
+
+  xx /= totalWeight;
+  xy /= totalWeight;
+  yy /= totalWeight;
+
+  const trace = xx + yy;
+  const detTerm = Math.sqrt(Math.max(((xx - yy) / 2) ** 2 + xy ** 2, 0));
+  const lambda1 = Math.max(trace / 2 + detTerm, 1);
+  const lambda2 = Math.max(trace / 2 - detTerm, 1);
+  const spreadAngle = 0.5 * Math.atan2(2 * xy, xx - yy);
+
+  // The weakest direction is usually orthogonal to the strongest sensor spread.
+  const angleDeg = ((spreadAngle * 180 / Math.PI) + 90 + 360) % 360;
+  const anisotropy = clamp(Math.sqrt(lambda1 / lambda2), 1.0, 3.0);
+
+  return {
+    semiMajor: clamp(base * anisotropy, base * 1.05, base * 2.8),
+    semiMinor: clamp(base / anisotropy, base * 0.5, base * 0.95),
+    angleDeg,
+  };
+}
+
+function createEllipseLayer(lat, lon, semiMajor, semiMinor, angleDeg) {
+  const angle = angleDeg * Math.PI / 180;
+  const points = [];
+  const steps = 72;
+
+  for (let i = 0; i <= steps; i++) {
+    const theta = (i / steps) * Math.PI * 2;
+    const x = semiMajor * Math.cos(theta);
+    const y = semiMinor * Math.sin(theta);
+    const east = x * Math.cos(angle) - y * Math.sin(angle);
+    const north = x * Math.sin(angle) + y * Math.cos(angle);
+    points.push(ellipsePoint(lat, lon, east, north));
+  }
+
+  return L.polygon(points, {
+    color: '#00ff88',
+    opacity: 0.38,
+    fillOpacity: 0.05,
+    weight: 1,
+    dashArray: '6 6',
+  });
+}
+
 function haversineKm(lat1, lon1, lat2, lon2) {
   const toRad = value => value * Math.PI / 180;
   const R = 6371;
@@ -548,6 +648,14 @@ function qualityClass(label) {
     case 'HIGH': return 'quality-high';
     case 'MED': return 'quality-med';
     default: return 'quality-low';
+  }
+}
+
+function trustClass(label) {
+  switch ((label || '').toUpperCase()) {
+    case 'VERIFIED': return 'trust-verified';
+    case 'WATCH': return 'trust-watch';
+    default: return 'trust-low';
   }
 }
 
@@ -615,6 +723,8 @@ function upsertAircraft(data, { fromSnapshot = false } = {}) {
   target.gdop = data.gdop || 0;
   target.qualityScore = data.quality_score || 0;
   target.qualityLabel = data.quality_label || 'LOW';
+  target.trustScore = data.trust_score || 0;
+  target.trustLabel = data.trust_label || 'LOW';
   target.rmsResidual = data.rms_residual_m || 0;
   target.contributors = data.contributors || [];
   target.fixes = Math.max(target.fixes + (fromSnapshot ? 0 : 1), data.fixes || target.fixes);
@@ -688,7 +798,10 @@ function refreshSidebar() {
       html: `
         <div class="ac-top">
           <div class="ac-icao">${icao}</div>
-          <div class="badge ${qualityClass(ac.qualityLabel)}">${ac.qualityLabel || 'LOW'}</div>
+          <div class="ac-badges">
+            <div class="badge ${qualityClass(ac.qualityLabel)}">${ac.qualityLabel || 'LOW'}</div>
+            <div class="badge ${trustClass(ac.trustLabel)}">${ac.trustLabel || 'LOW'}</div>
+          </div>
         </div>
         <div class="ac-badges">
           <div class="badge">Alt ${altFt.toLocaleString()}ft</div>
@@ -698,7 +811,7 @@ function refreshSidebar() {
           <div class="badge ${stale ? 'badge-dim' : ''}">${stale ? 'Stale' : 'Live'}</div>
         </div>
         <div class="ac-meta">
-          Fixes <span>${ac.fixes}</span> · Speed <span>${Math.round(ac.speed || 0)} m/s</span> · GDOP <span>${Number.isFinite(ac.gdop) ? ac.gdop.toFixed(2) : '—'}</span>
+          Fixes <span>${ac.fixes}</span> · Trust <span>${Math.round(ac.trustScore || 0)}</span> · GDOP <span>${Number.isFinite(ac.gdop) ? ac.gdop.toFixed(2) : '—'}</span>
         </div>`,
     };
   });
@@ -802,16 +915,16 @@ function updateStats() {
     document.getElementById('stat-sensors').textContent = avgSensors;
   }
 
-  document.getElementById('stat-quality').textContent = analytics.quality_label || '—';
+  document.getElementById('stat-quality').textContent = `${analytics.quality_label || '—'} / ${analytics.trust_label || '—'}`;
 }
 
 function renderSelection() {
   const panel = document.getElementById('detail-panel');
   geometryLines.clearLayers();
   geometrySensors.clearLayers();
-  if (uncertaintyCircle) {
-    map.removeLayer(uncertaintyCircle);
-    uncertaintyCircle = null;
+  if (uncertaintyEllipse) {
+    map.removeLayer(uncertaintyEllipse);
+    uncertaintyEllipse = null;
   }
 
   const ac = selectedICAO ? aircraft[selectedICAO] : null;
@@ -832,6 +945,10 @@ function renderSelection() {
         <div class="detail-value">${Math.round(ac.uncertainty || 0)} m</div>
       </div>
       <div class="detail-card">
+        <div class="detail-label">Trust</div>
+        <div class="detail-value">${ac.trustLabel || 'LOW'} · ${Math.round(ac.trustScore || 0)}</div>
+      </div>
+      <div class="detail-card">
         <div class="detail-label">GDOP</div>
         <div class="detail-value">${Number.isFinite(ac.gdop) ? ac.gdop.toFixed(2) : '—'}</div>
       </div>
@@ -848,7 +965,8 @@ function renderSelection() {
             <div class="sensor-name">${sensor.sensor_name || ('S-' + sensor.sensor_id)}</div>
             <div class="sensor-meta">
               RESIDUAL ${Math.round(sensor.residual_m || 0)} m · CLOCK ${Math.round(sensor.clock_adjustment_ns || 0)} ns<br>
-              JITTER ${Math.round(sensor.clock_jitter_ns || 0)} ns · SAMPLES ${sensor.clock_samples || 0}
+              JITTER ${Math.round(sensor.clock_jitter_ns || 0)} ns · SAMPLES ${sensor.clock_samples || 0}<br>
+              TRUST ${Math.round(sensor.seller_score || 0)} · ${sensor.trust_label || 'LOW'}
             </div>
           </div>
           <div class="sensor-health ${healthClass(sensor.clock_health)}">${sensor.clock_health || 'learning'}</div>
@@ -876,13 +994,8 @@ function renderSelection() {
   }
 
   if (ac.uncertainty > 0) {
-    uncertaintyCircle = L.circle([ac.lat, ac.lon], {
-      radius: ac.uncertainty,
-      color: '#00ff88',
-      opacity: 0.3,
-      fillOpacity: 0.04,
-      weight: 1,
-    }).addTo(map);
+    const ellipse = buildUncertaintyEllipse(ac);
+    uncertaintyEllipse = createEllipseLayer(ac.lat, ac.lon, ellipse.semiMajor, ellipse.semiMinor, ellipse.angleDeg).addTo(map);
   }
 }
 
@@ -901,6 +1014,10 @@ function renderNetworkPanel() {
       <div class="detail-card">
         <div class="detail-label">Avg Quality</div>
         <div class="detail-value">${analytics.quality_label || '—'}</div>
+      </div>
+      <div class="detail-card">
+        <div class="detail-label">Avg Trust</div>
+        <div class="detail-value">${analytics.trust_label || '—'} · ${Math.round(analytics.avg_trust_score || 0)}</div>
       </div>
       <div class="detail-card">
         <div class="detail-label">Tracked / Waiting</div>

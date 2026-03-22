@@ -13,6 +13,7 @@ type Observation struct {
 	Nanoseconds           uint64  // fine timestamp (nanosecond precision)
 	RawModeS              []byte  // raw Mode-S message bytes
 	TimestampAdjustmentNs float64 // learned per-sensor clock correction
+	SellerScore           float64
 }
 
 func (o *Observation) TimestampNs() int64 {
@@ -39,6 +40,8 @@ type MLATResult struct {
 	GDOP              float64
 	QualityScore      float64
 	QualityLabel      string
+	TrustScore        float64
+	TrustLabel        string
 	Contributors      []SensorContribution
 }
 
@@ -53,6 +56,8 @@ type SensorContribution struct {
 	ClockJitterNs     float64 `json:"clock_jitter_ns"`
 	ClockSamples      int     `json:"clock_samples"`
 	ClockHealth       string  `json:"clock_health"`
+	SellerScore       float64 `json:"seller_score"`
+	TrustLabel        string  `json:"trust_label"`
 }
 
 func (o Observation) CorrelationKey() string {

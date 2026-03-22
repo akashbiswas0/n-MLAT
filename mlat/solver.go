@@ -10,6 +10,8 @@ const (
 	C = 299_702_547.0
 
 	robustSubsetSize           = 4
+	maxSelectionSubsetSize     = 6
+	maxSelectionCombinations   = 120
 	inlierResidualMeters       = 3000.0
 	maxRMSResidualMeters       = 5000.0
 	maxObservedSpanSlackMeters = 5000.0
@@ -78,9 +80,11 @@ func Solve(icao string, obs []Observation) (*MLATResult, error) {
 
 	rxPos := make([]Vec3, len(obs))
 	arrivalTimes := make([]float64, len(obs))
+	weights := make([]float64, len(obs))
 	for i, o := range obs {
 		rxPos[i] = GeodeticToECEF(o.SensorLat, o.SensorLon, o.SensorAlt)
 		arrivalTimes[i] = o.CorrectedTimestampSeconds()
+		weights[i] = observationWeight(o)
 	}
 
 	if err := validateObservations(obs, rxPos, arrivalTimes); err != nil {
@@ -92,9 +96,21 @@ func Solve(icao string, obs []Observation) (*MLATResult, error) {
 		subsets = [][]int{makeSequentialIndices(len(obs))}
 	}
 
-	best, ok := fitRobust(rxPos, arrivalTimes, subsets)
+	best, ok := fitRobust(rxPos, arrivalTimes, weights, subsets)
 	if !ok {
 		return nil, fmt.Errorf("solver failed to converge for %s", icao)
+	}
+
+	if selected := selectBestSubset(obs, rxPos, arrivalTimes, weights, best); len(selected) >= MinSensors && len(selected) < len(obs) {
+		refined, refinedOK := fitRobust(
+			selectVec3s(rxPos, selected),
+			selectFloat64s(arrivalTimes, selected),
+			selectFloat64s(weights, selected),
+			combinationIndices(len(selected), robustSubsetSize),
+		)
+		if refinedOK {
+			best = liftCandidate(refined, selected)
+		}
 	}
 
 	lat, lon, alt := ECEFToGeodetic(best.pos)
@@ -105,7 +121,8 @@ func Solve(icao string, obs []Observation) (*MLATResult, error) {
 	gdop := computeGDOP(best.pos, selectVec3s(rxPos, best.inliers))
 	rmsResidualM := best.rms * C
 	uncertaintyM := estimateUncertaintyMeters(rmsResidualM, gdop, len(best.inliers))
-	qualityScore := computeQualityScore(rmsResidualM, gdop, len(best.inliers))
+	trustScore := trustScoreForInliers(obs, best.inliers)
+	qualityScore := computeQualityScore(rmsResidualM, gdop, len(best.inliers), trustScore)
 
 	return &MLATResult{
 		ICAO:              icao,
@@ -121,24 +138,127 @@ func Solve(icao string, obs []Observation) (*MLATResult, error) {
 		GDOP:              gdop,
 		QualityScore:      qualityScore,
 		QualityLabel:      qualityLabel(qualityScore),
+		TrustScore:        trustScore,
+		TrustLabel:        trustLabelForScore(trustScore),
 		Contributors:      contributorsForInliers(obs, best.inliers, best.residuals),
 	}, nil
 }
 
-func fitRobust(rxPos []Vec3, arrivalTimes []float64, subsets [][]int) (fitCandidate, bool) {
+func selectBestSubset(obs []Observation, rxPos []Vec3, arrivalTimes []float64, weights []float64, seed fitCandidate) []int {
+	n := len(obs)
+	if n <= MinSensors {
+		return makeSequentialIndices(n)
+	}
+
+	subsets := candidateSelectionSubsets(n)
+	if len(subsets) == 0 {
+		return nil
+	}
+
+	bestIdx := makeSequentialIndices(n)
+	bestScore := math.Inf(-1)
+	for _, subset := range subsets {
+		subsetPos := selectVec3s(rxPos, subset)
+		gdop := computeGDOP(seed.pos, subsetPos)
+		if math.IsNaN(gdop) || math.IsInf(gdop, 0) {
+			continue
+		}
+		trust := trustScoreForInliers(obs, subset)
+		baseline := maxBaselineMeters(subsetPos)
+		sensorBonus := clampFloat((float64(len(subset))-float64(MinSensors))/2.0, 0, 1)
+		baselineScore := clampFloat(baseline/120000.0, 0, 1)
+		geometryScore := clampFloat(1-(gdop-1.5)/9.0, 0, 1)
+		trustScore := clampFloat(trust/100.0, 0, 1)
+		score := 0.45*geometryScore + 0.3*trustScore + 0.15*baselineScore + 0.1*sensorBonus
+		if score > bestScore {
+			bestScore = score
+			bestIdx = append([]int(nil), subset...)
+		}
+	}
+	return bestIdx
+}
+
+func candidateSelectionSubsets(n int) [][]int {
+	maxSize := minInt(n, maxSelectionSubsetSize)
+	all := make([][]int, 0)
+	for size := MinSensors; size <= maxSize; size++ {
+		all = append(all, combinationIndices(n, size)...)
+	}
+	if len(all) == 0 {
+		return nil
+	}
+	if len(all) <= maxSelectionCombinations {
+		return all
+	}
+
+	sampled := make([][]int, 0, maxSelectionCombinations)
+	step := float64(len(all)-1) / float64(maxSelectionCombinations-1)
+	for i := 0; i < maxSelectionCombinations; i++ {
+		idx := int(math.Round(float64(i) * step))
+		if idx >= len(all) {
+			idx = len(all) - 1
+		}
+		sampled = append(sampled, all[idx])
+	}
+	return sampled
+}
+
+func liftCandidate(candidate fitCandidate, originalIndices []int) fitCandidate {
+	liftedInliers := make([]int, len(candidate.inliers))
+	for i, idx := range candidate.inliers {
+		if idx >= 0 && idx < len(originalIndices) {
+			liftedInliers[i] = originalIndices[idx]
+		}
+	}
+
+	liftedResiduals := make([]float64, len(originalIndices))
+	for i := range liftedResiduals {
+		liftedResiduals[i] = math.Inf(1)
+	}
+	for i, idx := range candidate.inliers {
+		if idx >= 0 && idx < len(originalIndices) && idx < len(candidate.residuals) {
+			liftedResiduals[originalIndices[idx]] = candidate.residuals[idx]
+			liftedInliers[i] = originalIndices[idx]
+		}
+	}
+
+	return fitCandidate{
+		pos:       candidate.pos,
+		emission:  candidate.emission,
+		sumSq:     candidate.sumSq,
+		rms:       candidate.rms,
+		inliers:   liftedInliers,
+		residuals: liftedResiduals,
+	}
+}
+
+func maxBaselineMeters(rxPos []Vec3) float64 {
+	maxBaseline := 0.0
+	for i := 0; i < len(rxPos); i++ {
+		for j := i + 1; j < len(rxPos); j++ {
+			if d := rxPos[i].Dist(rxPos[j]); d > maxBaseline {
+				maxBaseline = d
+			}
+		}
+	}
+	return maxBaseline
+}
+
+func fitRobust(rxPos []Vec3, arrivalTimes []float64, weights []float64, subsets [][]int) (fitCandidate, bool) {
 	best := fitCandidate{}
 	found := false
 
 	for _, subset := range subsets {
 		subsetPos := selectVec3s(rxPos, subset)
 		subsetArrival := selectFloat64s(arrivalTimes, subset)
+		subsetWeights := selectFloat64s(weights, subset)
 
-		pos, emission, _, err := fitObservationSet(subsetPos, subsetArrival)
+		pos, emission, _, err := fitObservationSet(subsetPos, subsetArrival, subsetWeights)
 		if err != nil {
 			continue
 		}
 
-		candidate, ok := refineCandidate(pos, emission, rxPos, arrivalTimes)
+		candidate, ok := refineCandidate(pos, emission, rxPos, arrivalTimes, weights)
 		if !ok {
 			continue
 		}
@@ -156,14 +276,14 @@ func fitRobust(rxPos []Vec3, arrivalTimes []float64, subsets [][]int) (fitCandid
 	return best, true
 }
 
-func refineCandidate(pos Vec3, emission float64, rxPos []Vec3, arrivalTimes []float64) (fitCandidate, bool) {
+func refineCandidate(pos Vec3, emission float64, rxPos []Vec3, arrivalTimes []float64, weights []float64) (fitCandidate, bool) {
 	residuals := computeTOAResiduals(pos, emission, rxPos, arrivalTimes)
 	inliers := pickInliers(residuals, inlierResidualMeters/C)
 	if len(inliers) < MinSensors {
 		return fitCandidate{}, false
 	}
 
-	refinedPos, refinedEmission, _, err := fitObservationSet(selectVec3s(rxPos, inliers), selectFloat64s(arrivalTimes, inliers))
+	refinedPos, refinedEmission, _, err := fitObservationSet(selectVec3s(rxPos, inliers), selectFloat64s(arrivalTimes, inliers), selectFloat64s(weights, inliers))
 	if err != nil {
 		return fitCandidate{}, false
 	}
@@ -174,7 +294,7 @@ func refineCandidate(pos Vec3, emission float64, rxPos []Vec3, arrivalTimes []fl
 		return fitCandidate{}, false
 	}
 
-	sumSq, rms := residualMetrics(refinedResiduals, refinedInliers)
+	sumSq, rms := residualMetrics(refinedResiduals, refinedInliers, weights)
 	if rms > maxRMSResidualMeters/C {
 		return fitCandidate{}, false
 	}
@@ -228,7 +348,7 @@ func validateObservations(obs []Observation, rxPos []Vec3, arrivalTimes []float6
 	return nil
 }
 
-func fitObservationSet(rxPos []Vec3, arrivalTimes []float64) (Vec3, float64, float64, error) {
+func fitObservationSet(rxPos []Vec3, arrivalTimes []float64, weights []float64) (Vec3, float64, float64, error) {
 	var cx, cy, cz float64
 	for _, r := range rxPos {
 		cx += r.X
@@ -249,8 +369,8 @@ func fitObservationSet(rxPos []Vec3, arrivalTimes []float64) (Vec3, float64, flo
 	found := false
 	for _, altGuess := range startAltitudes {
 		startPos := centroid.Scale((norm + altGuess) / norm)
-		startEmission := estimateEmissionTime(startPos, rxPos, arrivalTimes)
-		pos, emission, cost, err := runLevenbergMarquardtTOA(startPos, startEmission, rxPos, arrivalTimes)
+		startEmission := estimateEmissionTime(startPos, rxPos, arrivalTimes, weights)
+		pos, emission, cost, err := runLevenbergMarquardtTOA(startPos, startEmission, rxPos, arrivalTimes, weights)
 		if err != nil {
 			continue
 		}
@@ -268,15 +388,24 @@ func fitObservationSet(rxPos []Vec3, arrivalTimes []float64) (Vec3, float64, flo
 	return bestPos, bestEmission, bestCost, nil
 }
 
-func estimateEmissionTime(pos Vec3, rxPos []Vec3, arrivalTimes []float64) float64 {
+func estimateEmissionTime(pos Vec3, rxPos []Vec3, arrivalTimes []float64, weights []float64) float64 {
 	total := 0.0
+	weightTotal := 0.0
 	for i, rx := range rxPos {
-		total += arrivalTimes[i] - pos.Dist(rx)/C
+		weight := 1.0
+		if i < len(weights) {
+			weight = weights[i]
+		}
+		total += weight * (arrivalTimes[i] - pos.Dist(rx)/C)
+		weightTotal += weight
 	}
-	return total / float64(len(rxPos))
+	if weightTotal == 0 {
+		return total / float64(len(rxPos))
+	}
+	return total / weightTotal
 }
 
-func runLevenbergMarquardtTOA(startPos Vec3, startEmission float64, rxPos []Vec3, arrivalTimes []float64) (Vec3, float64, float64, error) {
+func runLevenbergMarquardtTOA(startPos Vec3, startEmission float64, rxPos []Vec3, arrivalTimes []float64, weights []float64) (Vec3, float64, float64, error) {
 	pos := startPos
 	emission := startEmission
 	lambda := 1e-3
@@ -284,7 +413,7 @@ func runLevenbergMarquardtTOA(startPos Vec3, startEmission float64, rxPos []Vec3
 
 	for iter := 0; iter < 250; iter++ {
 		residuals, jacobian := computeTOAResidualAndJacobian(pos, emission, rxPos, arrivalTimes)
-		cost := sumSquares(residuals)
+		cost := weightedSumSquares(residuals, weights)
 		if math.Abs(prevCost-cost) < 1e-18 {
 			return pos, emission, cost, nil
 		}
@@ -293,10 +422,14 @@ func runLevenbergMarquardtTOA(startPos Vec3, startEmission float64, rxPos []Vec3
 		var JtJ [4][4]float64
 		var Jtr [4]float64
 		for i, r := range residuals {
+			weight := 1.0
+			if i < len(weights) {
+				weight = weights[i]
+			}
 			for a := 0; a < 4; a++ {
-				Jtr[a] += jacobian[i][a] * r
+				Jtr[a] += weight * jacobian[i][a] * r
 				for b := 0; b < 4; b++ {
-					JtJ[a][b] += jacobian[i][a] * jacobian[i][b]
+					JtJ[a][b] += weight * jacobian[i][a] * jacobian[i][b]
 				}
 			}
 		}
@@ -313,7 +446,7 @@ func runLevenbergMarquardtTOA(startPos Vec3, startEmission float64, rxPos []Vec3
 		newPos := Vec3{pos.X - delta[0], pos.Y - delta[1], pos.Z - delta[2]}
 		newEmission := emission - delta[3]
 		newResiduals, _ := computeTOAResidualAndJacobian(newPos, newEmission, rxPos, arrivalTimes)
-		newCost := sumSquares(newResiduals)
+		newCost := weightedSumSquares(newResiduals, weights)
 
 		if newCost < cost {
 			pos = newPos
@@ -325,7 +458,7 @@ func runLevenbergMarquardtTOA(startPos Vec3, startEmission float64, rxPos []Vec3
 	}
 
 	finalResiduals, _ := computeTOAResidualAndJacobian(pos, emission, rxPos, arrivalTimes)
-	return pos, emission, sumSquares(finalResiduals), nil
+	return pos, emission, weightedSumSquares(finalResiduals, weights), nil
 }
 
 func computeTOAResiduals(pos Vec3, emission float64, rxPos []Vec3, arrivalTimes []float64) []float64 {
@@ -363,14 +496,20 @@ func pickInliers(residuals []float64, threshold float64) []int {
 	return inliers
 }
 
-func residualMetrics(residuals []float64, indices []int) (sumSq float64, rms float64) {
+func residualMetrics(residuals []float64, indices []int, weights []float64) (sumSq float64, rms float64) {
+	weightTotal := 0.0
 	for _, idx := range indices {
-		sumSq += residuals[idx] * residuals[idx]
+		weight := 1.0
+		if idx < len(weights) {
+			weight = weights[idx]
+		}
+		sumSq += weight * residuals[idx] * residuals[idx]
+		weightTotal += weight
 	}
-	if len(indices) == 0 {
+	if len(indices) == 0 || weightTotal == 0 {
 		return math.MaxFloat64, math.MaxFloat64
 	}
-	return sumSq, math.Sqrt(sumSq / float64(len(indices)))
+	return sumSq, math.Sqrt(sumSq / weightTotal)
 }
 
 func betterCandidate(a, b fitCandidate) bool {
@@ -437,6 +576,18 @@ func sumSquares(values []float64) float64 {
 	return total
 }
 
+func weightedSumSquares(values []float64, weights []float64) float64 {
+	total := 0.0
+	for i, value := range values {
+		weight := 1.0
+		if i < len(weights) {
+			weight = weights[i]
+		}
+		total += weight * value * value
+	}
+	return total
+}
+
 func residualMapForInliers(obs []Observation, inliers []int, residuals []float64) map[int64]float64 {
 	out := make(map[int64]float64, len(inliers))
 	for _, idx := range inliers {
@@ -455,12 +606,14 @@ func contributorsForInliers(obs []Observation, inliers []int, residuals []float6
 		}
 		observation := obs[idx]
 		contributors = append(contributors, SensorContribution{
-			SensorID:   observation.SensorID,
-			SensorName: observation.SensorName,
-			Lat:        observation.SensorLat,
-			Lon:        observation.SensorLon,
-			Alt:        observation.SensorAlt,
-			ResidualM:  math.Abs(residuals[idx]) * C,
+			SensorID:    observation.SensorID,
+			SensorName:  observation.SensorName,
+			Lat:         observation.SensorLat,
+			Lon:         observation.SensorLon,
+			Alt:         observation.SensorAlt,
+			ResidualM:   math.Abs(residuals[idx]) * C,
+			SellerScore: observation.SellerScore,
+			TrustLabel:  trustLabelForScore(observation.SellerScore),
 		})
 	}
 
@@ -486,14 +639,15 @@ func estimateUncertaintyMeters(rmsResidualM, gdop float64, sensors int) float64 
 	return clampFloat(uncertainty, 100, 25000)
 }
 
-func computeQualityScore(rmsResidualM, gdop float64, sensors int) float64 {
+func computeQualityScore(rmsResidualM, gdop float64, sensors int, trustScore float64) float64 {
 	sensorScore := clampFloat((float64(sensors)-float64(MinSensors)+1)/4, 0, 1)
 	residualScore := clampFloat(1-rmsResidualM/3500, 0, 1)
 	geometryScore := 0.2
 	if !math.IsNaN(gdop) && !math.IsInf(gdop, 0) {
 		geometryScore = clampFloat(1-(gdop-1.5)/8.5, 0, 1)
 	}
-	return 100 * (0.35*sensorScore + 0.4*residualScore + 0.25*geometryScore)
+	trustComponent := clampFloat(trustScore/100, 0, 1)
+	return 100 * (0.25*sensorScore + 0.3*residualScore + 0.2*geometryScore + 0.25*trustComponent)
 }
 
 func qualityLabel(score float64) string {
@@ -505,6 +659,31 @@ func qualityLabel(score float64) string {
 	default:
 		return "LOW"
 	}
+}
+
+func observationWeight(obs Observation) float64 {
+	score := obs.SellerScore
+	if score <= 0 {
+		score = 70
+	}
+	return clampFloat(0.2+0.8*(score/100), 0.2, 1.0)
+}
+
+func trustScoreForInliers(obs []Observation, inliers []int) float64 {
+	if len(inliers) == 0 {
+		return 0
+	}
+	total := 0.0
+	for _, idx := range inliers {
+		if idx >= 0 && idx < len(obs) {
+			score := obs[idx].SellerScore
+			if score <= 0 {
+				score = 70
+			}
+			total += score
+		}
+	}
+	return total / float64(len(inliers))
 }
 
 func computeGDOP(pos Vec3, rxPos []Vec3) float64 {
