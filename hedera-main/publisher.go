@@ -85,7 +85,7 @@ func NewPublisher() (*Publisher, error) {
 		return nil, fmt.Errorf("invalid hedera_id: %w", err)
 	}
 
-	myPrivateKey, err := hederasdk.PrivateKeyFromString(privateKey)
+	myPrivateKey, err := hederasdk.PrivateKeyFromStringECDSA(privateKey)
 	if err != nil {
 		return nil, fmt.Errorf("invalid private_key: %w", err)
 	}
@@ -111,7 +111,7 @@ func NewPublisher() (*Publisher, error) {
 }
 
 func (p *Publisher) Publish(record AuditRecord) {
-	data, err := json.Marshal(record)
+	data, err := json.MarshalIndent(record, "", "  ")
 	if err != nil {
 		log.Printf("HCS marshal error: %v", err)
 		return
